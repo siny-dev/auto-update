@@ -1,0 +1,16 @@
+# Local sync state and diagnostics
+/state/
+/logs/
+/outbox/*
+!/outbox/.gitkeep
+# Credentials and local machine configuration
+*.token
+credentials*
+local.ini
+# Build outputs
+/build/
+/dist/
+*.exe
+*.dll
+*.obj
+*.pdb
