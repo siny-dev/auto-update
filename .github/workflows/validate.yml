@@ -1,0 +1,28 @@
+name: AutoUpdate validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sync-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PowerShell scripts
+        shell: powershell
+        run: |
+          $files = @("tools/sync.ps1", "tools/credential-helper.ps1", "tests/test_sync.ps1")
+          foreach ($file in $files) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          }
+      - name: Exercise local push, fast-forward pull, and conflict preservation
+        shell: powershell
+        run: .\tests\test_sync.ps1

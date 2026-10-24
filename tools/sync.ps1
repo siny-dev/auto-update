@@ -101,19 +101,59 @@ function Sync-Once{
  Write-Log ('CONFLICT diverged local='+$ahead+' remote='+$behind+'; both histories preserved')
  return 34
 }
+function Test-IgnoredChange([string]$FullPath){
+ $relative=$FullPath.Substring([Math]::Min($FullPath.Length,$Root.Length)).TrimStart([char[]]@('\','/')).ToLowerInvariant()
+ return $relative.StartsWith('.git\') -or $relative.StartsWith('state\') -or $relative.StartsWith('logs\') -or $relative.StartsWith('outbox\') -or $relative -eq '.git'
+}
+function Wait-ForSyncTrigger([int]$PollSeconds,[int]$DebounceSeconds){
+ $deadline=(Get-Date).AddSeconds([Math]::Max(1,$PollSeconds));$lastChange=$null
+ do{
+  $now=Get-Date;$remaining=[int][Math]::Ceiling(($deadline-$now).TotalSeconds)
+  if($remaining -le 0){return $false}
+  if($lastChange){$stable=[int][Math]::Ceiling(($lastChange.AddSeconds($DebounceSeconds)-$now).TotalSeconds);if($stable -le 0){return $true};$remaining=[Math]::Min($remaining,$stable)}
+  $event=Wait-Event -Timeout ([Math]::Max(1,$remaining))
+  if($event){
+   $path=$event.SourceEventArgs.FullPath
+   Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue
+   if($path -and -not (Test-IgnoredChange $path)){$lastChange=Get-Date}
+  }
+ }while($true)
+}
 $dotSourced=($MyInvocation.InvocationName -eq '.')
-$mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateSourceSync');$owned=$false;$code=0
+$mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateSourceSync');$owned=$false;$code=0;$retryMinutes=1;$watcher=$null;$subscriptions=@()
 try{
  try{$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
  if(-not $owned){Write-Log 'SKIP another sync worker is active';$code=0}
  else{
+  if(-not $Once){
+   try{
+    $watcher=New-Object System.IO.FileSystemWatcher
+    $watcher.Path=$Root;$watcher.Filter='*';$watcher.IncludeSubdirectories=$true
+    $watcher.NotifyFilter=[IO.NotifyFilters]::FileName -bor [IO.NotifyFilters]::LastWrite -bor [IO.NotifyFilters]::Size
+    $watcher.InternalBufferSize=32768;$watcher.EnableRaisingEvents=$true
+    foreach($name in @('Changed','Created','Deleted','Renamed')){
+     $id='AutoUpdateSourceSync.'+$name
+     Register-ObjectEvent -InputObject $watcher -EventName $name -SourceIdentifier $id | Out-Null
+     $subscriptions+=$id
+    }
+   }catch{Write-Log 'WATCHER unavailable; periodic checks remain enabled';if($watcher){$watcher.Dispose();$watcher=$null}}
+  }
   do{
    try{$code=Sync-Once}
    catch{Write-Log ('SYNC_RETRY unexpected error: '+$_.Exception.GetType().Name);if($Once){$code=35}}
    if($Once){break}
-   Start-Sleep -Seconds ([Math]::Max(1,$IntervalMinutes)*60)
+   if($code -eq 0){$delayMinutes=[Math]::Max(1,$IntervalMinutes);$retryMinutes=1}
+   else{$delayMinutes=$retryMinutes;$retryMinutes=[Math]::Min(30,$retryMinutes*2)}
+   $delaySeconds=[Math]::Min(1800,$delayMinutes*60)
+   if($code -ne 0){$jitter=[Math]::Max(1,[int]($delaySeconds*0.15));$delaySeconds=[Math]::Max(1,[Math]::Min(1800,$delaySeconds+(Get-Random -Minimum (-$jitter) -Maximum ($jitter+1))))}
+   if($watcher){[void](Wait-ForSyncTrigger $delaySeconds 90)}else{Start-Sleep -Seconds $delaySeconds}
   }while(-not $Once)
  }
-}finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
+}finally{
+ foreach($id in $subscriptions){Unregister-Event -SourceIdentifier $id -ErrorAction SilentlyContinue;Get-Event -SourceIdentifier $id -ErrorAction SilentlyContinue|Remove-Event -ErrorAction SilentlyContinue}
+ if($watcher){$watcher.EnableRaisingEvents=$false;$watcher.Dispose()}
+ if($owned){$mutex.ReleaseMutex()}
+ $mutex.Dispose()
+}
 if($dotSourced){$global:AutoUpdateSyncLastExit=$code;return}
 exit $code
