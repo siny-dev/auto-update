@@ -15,7 +15,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 최신 GitHub 릴리스를 10분마다 확인하는 공용 작업자.
 - `tools/register-app.ps1`: 프로그램을 공용 업데이트 목록에 한 번 등록하는 연결 명령.
 - `tools/install-update-task.ps1`: 사용자 로그인 후 공용 업데이트 작업자를 숨김 백그라운드에서 실행하도록 등록한다.
-- `tools/install-background.ps1`: 예약 작업 등록이 제한된 PC에서도 사용자 로그인 시작 폴더에 숨김 실행 바로가기를 설치한다.
+- `tools/install-background.ps1`: 사용자 로그인 시작 폴더에 숨김 실행 바로가기를 설치한다.
 - `state/`, `logs/`: PC별 상태와 로그. 저장소에 올리지 않는다.
 
 패키지는 앱 ID·버전·플랫폼·아키텍처·최소 엔진 버전·호환 계약과 모든 파일의 경로·종류·크기·SHA-256을 선언한다. 엔진은 각 파일을 staging에서 검증한 다음 불변 버전 폴더에 넣고 `current.json`을 원자적으로 바꾼다. 검증이나 전환이 실패하면 현재 포인터와 이전 정상 버전을 보존한다. 구버전으로의 자동 다운그레이드는 거절한다. 사용자 설정·자격증명·캐시·작업 데이터는 패키지 디렉터리 바깥에 둔다.
@@ -26,7 +26,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 각 앱은 한 번만 얇은 연결부를 추가해 공용 엔진의 버전 포인터를 읽고 앱별 훅을 제공한다. 이후 공용 엔진 업데이트는 연결된 앱들이 정해진 안전 경계에서 새 엔진 버전을 로드하게 한다. 이미 엔진이 각 실행 파일에 복사되어 있는 앱은 연결부 전환과 호환 검증을 한 번 거쳐야 한다. 연결되지 않은 앱에 공용 엔진 수정이 저절로 도달한다고 간주하지 않는다.
 
-등록은 `tools/register-app.ps1 -AppId <고유 ID> -Owner <GitHub 소유자> -Repository <저장소> -Architecture <any|x86|x64|arm64>`로 한 번 수행한다. 등록부는 PC의 AutoUpdate 상태 폴더에 저장되며 Git 저장소에 커밋되지 않는다. `tools/install-update-task.ps1`은 기본 10분 주기의 백그라운드 작업을 설치한다. 작업자는 등록된 앱별 최신 릴리스를 설치하고 `state/logs/app-updates.jsonl`에 결과를 남긴다. 새 앱은 패키지 규약과 앱 연결부까지 통합해야 실제 실행 중 앱에 live 패치 또는 상태 보존 재시작이 반영된다.
+등록은 `tools/register-app.ps1 -AppId <고유 ID> -Owner <GitHub 소유자> -Repository <저장소> -Architecture <any|x86|x64|arm64>`로 한 번 수행한다. 등록부는 PC의 AutoUpdate 상태 폴더에 저장되며 Git 저장소에 커밋되지 않는다. `tools/install-background.ps1`은 로그인 시작 폴더에서 소스 동기화와 등록 앱 업데이트 확인을 숨김 백그라운드로 실행한다. 작업자는 등록된 앱별 최신 릴리스를 설치하고 사용자별 AutoUpdate 상태 폴더의 `logs/app-updates.jsonl`에 결과를 남긴다. 새 앱은 패키지 규약과 앱 연결부까지 통합해야 실제 실행 중 앱에 live 패치 또는 상태 보존 재시작이 반영된다.
 
 프로덕션 배포는 설정된 비공개 GitHub 저장소의 release asset과 정상 HTTPS 검증을 사용한다. PAT는 `AutoUpdate/github` Windows 자격 증명 대상에서 읽어야 하며 명령행·설정·로그·패키지에 쓰지 않는다. 최소 저장소와 최소 권한만 허용한다. 로컬 `PackageRoot` 설치는 격리된 검증에만 사용한다. 소스 Git 동기화는 커밋 그래프를 기준으로 fast-forward만 적용하고, 분기 시 양쪽 이력을 보존한 채 멈춘다.
 
@@ -46,7 +46,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 `tools/register-app.ps1 -AppId Alarm -Owner siny-dev -Repository alarm -Architecture x64`
 
-백그라운드 10분 확인 작업은 다음 명령으로 설치한다. 예약 작업 등록이 허용되면 예약 작업을 쓰고, 제한된 PC에서는 사용자 로그인 시작 폴더의 숨김 바로가기를 쓴다.
+백그라운드 10분 확인은 다음 명령으로 설정한다. 사용자 로그인 시작 폴더에 숨김 바로가기를 만들고 지금 바로 두 작업을 시작한다.
 
 `tools/install-background.ps1`
 
