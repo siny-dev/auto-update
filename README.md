@@ -19,6 +19,8 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `packages/`: 승인된 엔진·앱 패키지의 개발 산출물.
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
 - `tools/autoupdate.ps1`: 설치·상태 조회·앱 등록 및 앱 연결용 JSON resolve 명령줄 진입점. `tools/restart-apply.ps1`은 예외 재시작 때 저장된 상태를 전달하고 실행 파일을 교체한 뒤, 새 앱의 복원 확인 전이면 이전 실행본으로 롤백한다. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. AutoUpdate 자체 v0.1.1402는 세 공용 런타임 파일로 자동 게시·설치됐고, 설치본 도우미의 성공·롤백 시험을 통과했다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
+- `tools/build-engine-release.ps1`: GitHub 배포에서 공유 엔진, 앱 연결 CLI, 재시작 도우미를 한 개의 불변 패키지로 묶는다. `tests/test_engine_release.ps1`은 세 파일이 모두 같은 매니페스트·해시 검증·설치 절차를 거치는지 확인한다.
+- `tools/test-all.ps1`: `tests/test_*.ps1`을 각각 격리된 PowerShell 프로세스로 실행하고 실제 종료 코드를 확인한다. 모든 회귀시험과 자체 업데이트 전파 시험을 CI와 엔진 게시 전에 실행한다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분 시작 간격으로 수행하는 공용 작업자. 각 주기 처리시간을 빼서 시작 간격 누적 지연을 막는다. AutoUpdate 자체가 새 패키지를 받으면 같은 주기 안에서 새 코어 모듈을 다시 불러온 뒤 나머지 등록 앱을 처리한다. 작업자 스크립트 자체가 공유 폴더에서 바뀌면 다음 확인 주기 뒤 숨김으로 새 프로세스를 이어 실행한다.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 선언된 파일이 바뀌거나 원격보다 로컬 패키지 버전이 낮으면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
@@ -51,6 +53,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - 완료: 각 등록 앱이 `outbox/apps/<AppId>/<version>/` 로컬 패키지 후보와 GitHub stable 릴리스를 10분마다 비교한다. 높은 버전은 로컬 또는 GitHub에서 선택하고, 같은 버전에서 payload hash가 다르면 충돌로 보류한다. 로컬 최신 패키지 선택·실제 파일 크기/SHA-256 사전 검증·설치와 후보 판정 단위시험 통과. 손상된 높은 버전 후보는 건너뛰고 다음 유효 패키지를 선택한다. 같은 버전의 설치본에서 payload가 다르면 already-current로 오인하지 않고 충돌로 보류한다.
 - 로컬 검증 완료: `build.json` 레시피에서 자동 패키지를 만들고, 변경이 없으면 건너뛰며, 바뀌거나 원격이 더 높으면 로컬·GitHub 최신보다 높은 버전을 만든다. 로컬 패키지는 GitHub 초안 릴리스에 올린 뒤 manifest·asset 수·각 원격 파일의 크기와 SHA-256을 확인하고 공개한다. 원격 최신 패키지는 검증 후 공유 outbox에 원자 저장하고 설치한다. 버전 충돌은 보류하고 덮어쓰지 않는다. 자동 빌드·후보 선택·충돌·staging/rollback, 상태 파일 누락 시 기존 패키지 인식, 마지막 패키지 손실 후 재빌드 로컬시험 통과. CI/validation #24 통과. 실제 앱에는 아직 `build.json`이 없어 앱 릴리스 게시시험은 남아 있다.
 - 핵심 미완료: AutoUpdate 코어의 최신 릴리스 설치 후 같은 10분 주기에서 새 엔진을 재로딩하고 이후 앱을 처리하도록 작업자와 회귀 시험을 추가했다. 현재 상태 저장소에는 `AutoUpdate`와 `BASE-001`만 등록되어 있고, `BASE-001`은 원격 패키지 설치·검증까지 완료됐다. 실행 중 앱의 실제 live/restart 적용, 다른 기존 앱의 연결, 여러 앱이 등록된 상태에서의 전체 전파 확인이 남아 있다. 따라서 공유 폴더의 기존 모든 프로그램이 이미 자동 패치되는 상태는 아니다.
+- 게시 회귀 기준: GitHub 엔진 게시 작업은 공유 런타임 3개 파일과 완전한 `tools/test-all.ps1` 시험을 통과해야 한다. 테스트·문서만 바뀐 경우에는 엔진 무변경 릴리스를 만들지 않도록 게시 경로를 런타임에 한정한다.
 
 이 작업은 공용 엔진의 자동 전파와 라이브/재시작 경계를 먼저 완성·검증한다. 기존 앱의 최초 공용 런타임 채택은 공통 연결 계약으로 처리하고, 이후 앱마다 업데이트 엔진을 다시 패치하지 않도록 한다. MA는 포함하지 않는다.
 
@@ -68,4 +71,4 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 `tools/autoupdate.ps1 -Command install -PackageRoot <검증용 패키지 폴더> -StateRoot <앱 데이터 경로> -AppId <앱 ID> -Architecture x64`
 
-`app-base` 템플릿에는 공용 연결부가 포함되어 있으며 앱은 실행 후 공용 상태 저장소에 자동 등록된다. 현재 이 PC에서는 `AutoUpdate`와 `BASE-001`만 등록되어 있다. Workboard·Re-sleeving·GitHub Auto Maker 같은 기존 자체 업데이터는 공용 엔진에 자동 연결되지 않으므로 각 프로그램의 연결부를 적용하고 실제 패치를 확인해야 한다. 미등록 앱은 자동으로 업데이트되지 않는다.
+`app-base` 템플릿에는 공용 연결부가 포함되어 있으며 앱은 실행 후 공용 상태 저장소에 자동 등록된다. 등록부는 PC별이므로 실제 전파 대상을 확인하려면 해당 PC의 `%LOCALAPPDATA%\Siny\AutoUpdate\registry\apps.json`과 `logs\app-updates.jsonl`을 확인한다. 기존 자체 업데이터 앱은 한 번 공용 연결부를 적용해야 하며, 미등록 앱은 자동으로 업데이트되지 않는다.

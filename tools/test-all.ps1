@@ -22,4 +22,4 @@ if($failures.Count -gt 0){
     $failures|ForEach-Object{Write-Output $_}
     exit 1
 }
-Write-Output ('ALL '+$tests.Count+' AUTUPDATE TESTS PASSED')
+Write-Output ('ALL '+$tests.Count+' AUTOUPDATE TESTS PASSED')

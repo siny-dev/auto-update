@@ -42,6 +42,3 @@ try {
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-package-test-')){throw 'refusing unsafe test cleanup'}
     if(Test-Path -LiteralPath $resolved){Remove-Item -LiteralPath $resolved -Recurse -Force}
 }
-& (Join-Path $PSScriptRoot 'test_candidates.ps1')
-& (Join-Path $PSScriptRoot 'test_publish.ps1')
-& (Join-Path $PSScriptRoot 'test_local_build.ps1')
