@@ -206,7 +206,11 @@ function Install-AuLatestRelease {
     }
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if ($current -and $current.Version -eq [string]$manifest.version) {
-        return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=[string]$manifest.version;Path=$current.Path;Mode=[string]$manifest.mode}
+        $installedManifest=Get-Content -Raw -LiteralPath (Join-Path $current.Path 'manifest.json')|ConvertFrom-Json
+        if((Get-AuManifestFingerprint $installedManifest) -ceq (Get-AuManifestFingerprint $manifest)){
+            return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=[string]$manifest.version;Path=$current.Path;Mode=[string]$manifest.mode}
+        }
+        return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$manifest.version;Path=$current.Path;Mode=[string]$manifest.mode;Message='The installed package has the same version but different contents; both copies were preserved.'}
     }
     if ($current -and ([version]$manifest.version -lt [version]$current.Version)) { throw 'Downgrades are blocked by default.' }
     $assetMap=@{};foreach($asset in $release.assets){if($assetMap.ContainsKey([string]$asset.name)){throw 'Release contains duplicate asset names.'};$assetMap[[string]$asset.name]=$asset}
@@ -324,8 +328,8 @@ function Install-AuLatestAvailable {
     if($current -and [version]$current.Version -gt [version]$selectedVersion){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode}}
     if($winner -eq 'github'){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote}
     if($current -and $current.Version -eq $selectedVersion){
-        $manifestPath=Join-Path $local.Path 'manifest.json'
-        if($current.Pointer.manifest_sha256 -eq (Get-AuFileSha256 $manifestPath)){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$selectedVersion;Path=$current.Path;Mode=[string]$local.Manifest.mode}}
+        $installedManifest=Get-Content -Raw -LiteralPath (Join-Path $current.Path 'manifest.json')|ConvertFrom-Json
+        if((Get-AuManifestFingerprint $installedManifest) -ceq (Get-AuManifestFingerprint $local.Manifest)){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$selectedVersion;Path=$current.Path;Mode=[string]$local.Manifest.mode}}
         return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=$selectedVersion;Path=$current.Path;Mode=[string]$local.Manifest.mode;Message='An installed package already uses this version with different contents; both copies were preserved.'}
     }
     return Install-AuPackage -PackageRoot $local.Path -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
@@ -368,7 +372,11 @@ function Install-AuPackageUnlocked {
     [void][IO.Directory]::CreateDirectory($stagingRoot)
     $versionPath = Get-AuContainedPath $versionsRoot ([string]$manifest.version)
     $current = Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
-    if ($current -and $current.Version -eq $manifest.version) { return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$manifest.version;Path=$current.Path;Mode=$manifest.mode} }
+    if ($current -and $current.Version -eq $manifest.version) {
+        $installedManifest=Get-Content -Raw -LiteralPath (Join-Path $current.Path 'manifest.json')|ConvertFrom-Json
+        if((Get-AuManifestFingerprint $installedManifest) -ceq (Get-AuManifestFingerprint $manifest)){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$manifest.version;Path=$current.Path;Mode=$manifest.mode}}
+        return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=$manifest.version;Path=$current.Path;Mode=$manifest.mode;Message='An installed package has the same version but different contents; both copies were preserved.'}
+    }
     if ($current -and ([version]$manifest.version -lt [version]$current.Version)) { throw 'Downgrades are blocked by default.' }
     if (Test-Path -LiteralPath $versionPath) { throw 'This version already exists; refusing to overwrite an immutable package.' }
 

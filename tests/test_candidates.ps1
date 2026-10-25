@@ -32,6 +32,10 @@ try{
     Assert ((Compare-AuPackageCandidates $latest.Manifest $conflicting) -eq 'conflict') 'same-version different-content conflict was not detected'
     $installed=Install-AuPackage -PackageRoot $latest.Path -StateRoot (Join-Path $testRoot 'state') -AppId demo -Architecture x64
     Assert ($installed.Version -eq '1.0.2' -and $installed.Status -eq 'staged') 'selected local latest package did not install'
+    $sameContent=Install-AuPackage -PackageRoot (Join-Path $localRoot '1.0.2') -StateRoot (Join-Path $testRoot 'state') -AppId demo -Architecture x64
+    Assert ($sameContent.Status -eq 'already-current') 'same-version identical installed package was not recognized'
+    $sameVersionConflict=Install-AuPackage -PackageRoot (Join-Path $testRoot 'conflicting') -StateRoot (Join-Path $testRoot 'state') -AppId demo -Architecture x64
+    Assert ($sameVersionConflict.Status -eq 'conflict') 'same-version changed installed package was silently accepted'
     'PASS: highest local version, GitHub/local winner, same-hash equality, same-version conflict, and local staging'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
