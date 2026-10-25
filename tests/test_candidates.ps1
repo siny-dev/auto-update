@@ -55,7 +55,12 @@ try{
     Assert $assetFailed 'duplicate common manifest assets were accepted'
     Assert ((& $module {param($local,$remote) Select-AuPackageWinner -LocalManifest $local -RemoteManifest $remote} $m2 $null) -eq 'local') 'verified local package did not win when GitHub has no AutoUpdate manifest'
     Assert ((& $module {param($local,$remote) Select-AuPackageWinner -LocalManifest $local -RemoteManifest $remote} $null $m2) -eq 'github') 'GitHub package was not selected when no local package exists'
-    'PASS: legacy release without common manifest falls back to the verified local package; malformed manifest assets remain rejected'
+    & $module {Set-Item -Path Function:\script:Get-AuLatestReleaseManifest -Value {param($Owner,$Repository,$AppId,$Architecture) return $null}}
+    $legacyState=Join-Path $testRoot 'legacy-release-state'
+    $legacyResult=Install-AuLatestAvailable -Owner owner -Repository demo -AppId demo -StateRoot $legacyState -Architecture x64 -LocalPackageRoot $localRoot
+    Assert ($legacyResult.Status -eq 'staged' -and $legacyResult.Version -eq '1.0.2') 'verified local package did not install when latest GitHub release was legacy'
+    Assert ((Get-AuVerifiedCurrent -StateRoot $legacyState -AppId demo -Architecture x64).Verified) 'legacy-release fallback did not pass installed package verification'
+    'PASS: legacy GitHub release detection, verified local fallback, and malformed manifest rejection'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-candidate-test-')){throw 'refusing unsafe test cleanup'}

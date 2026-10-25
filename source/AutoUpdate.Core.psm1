@@ -487,7 +487,8 @@ function Install-AuLatestAvailable {
         if(-not $remote){return [pscustomobject]@{Status='legacy-release';AppId=$AppId;Version=$null;Path=$null;Mode=$null;Message='The latest GitHub release has no AutoUpdate package manifest; waiting for a compatible package.'}}
         return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote -LocalPackageRoot $LocalPackageRoot
     }
-    $winner=Select-AuPackageWinner -LocalManifest $local.Manifest -RemoteManifest $remote.Manifest
+    $remoteManifest=if($remote){$remote.Manifest}else{$null}
+    $winner=Select-AuPackageWinner -LocalManifest $local.Manifest -RemoteManifest $remoteManifest
     if($winner -eq 'conflict'){return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$local.Manifest.version;Path=$null;Mode=$null;Message='Local and GitHub packages have the same version but different contents; both were preserved.'}}
     $selectedVersion=if($winner -eq 'github'){[string]$remote.Manifest.version}else{[string]$local.Manifest.version}
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
