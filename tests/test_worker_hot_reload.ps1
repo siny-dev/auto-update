@@ -58,7 +58,12 @@ try{
     if($rows -notcontains 'new:TEST-APP'){throw 'The remaining app was not processed with the newly installed engine in the same cycle.'}
     if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
     Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
-
+    $logRows=@(Get-Content -LiteralPath (Join-Path $state 'logs\app-updates.jsonl')|ForEach-Object{$_|ConvertFrom-Json})
+    $autoRow=@($logRows|Where-Object{$_.app_id -ceq 'AutoUpdate'}|Select-Object -First 1)
+    $otherRows=@($logRows|Where-Object{$_.app_id -in @('TEST-APP','2-APP')})
+    if($autoRow.Count -ne 1 -or $autoRow[0].engine_version -cne '0.1.1'){throw 'The AutoUpdate app did not record the engine version that performed its own check.'}
+    if($otherRows.Count -ne 2 -or @($otherRows|Where-Object{$_.engine_version -cne '0.1.2'}).Count){throw 'The remaining apps did not record the newly loaded engine version.'}
+    Write-Output 'PASS each app log records the exact AutoUpdate engine version used for its check.'
     $cadenceWorker=Join-Path $tools 'cadence-worker.ps1';$waitMarker=Join-Path $temp 'cycle-wait-ms.txt'
     $cadenceSource=$workerSource.Replace('if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}','if($waitMilliseconds -gt 0){[IO.File]::WriteAllText($env:AU_WORKER_TEST_WAIT_MARKER,[string]$waitMilliseconds);exit 0}')
     if($cadenceSource -ceq $workerSource -or $cadenceSource.Contains('Start-Sleep -Milliseconds $waitMilliseconds')){throw 'Could not isolate the worker cadence wait for testing.'}

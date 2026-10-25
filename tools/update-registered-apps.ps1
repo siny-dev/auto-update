@@ -10,8 +10,9 @@ $root=Split-Path -Parent $PSScriptRoot
 $sourceModule=Join-Path $root 'source\AutoUpdate.Core.psm1'
 $logRoot=Join-Path $StateRoot 'logs';[void][IO.Directory]::CreateDirectory($logRoot)
 $logPath=Join-Path $logRoot 'app-updates.jsonl'
+$script:activeEngineVersion='source'
 function Write-UpdateLog($Record){
-    $line=([ordered]@{utc=[DateTime]::UtcNow.ToString('o');app_id=$Record.AppId;status=$Record.Status;version=$Record.Version;message=$Record.Message}|ConvertTo-Json -Compress)
+    $line=([ordered]@{utc=[DateTime]::UtcNow.ToString('o');engine_version=$script:activeEngineVersion;app_id=$Record.AppId;status=$Record.Status;version=$Record.Version;message=$Record.Message}|ConvertTo-Json -Compress)
     [IO.File]::AppendAllText($logPath,$line+[char]10,[Text.UTF8Encoding]::new($false))
 }
 function Resolve-EngineModule{
@@ -32,6 +33,7 @@ function Resolve-EngineModule{
 function Import-EngineModule([string]$ModulePath){
     Remove-Module AutoUpdate.Core -ErrorAction SilentlyContinue
     Import-Module $ModulePath -Force -Global
+    if($ModulePath -match '[\\/]versions[\\/](\d+\.\d+\.\d+)[\\/]') {$script:activeEngineVersion=$Matches[1]} else {$script:activeEngineVersion='source'}
 }
 function Invoke-UpdateCycle{
     $modulePath=Resolve-EngineModule
