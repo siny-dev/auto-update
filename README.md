@@ -50,18 +50,18 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 등록은 `tools/register-app.ps1 -AppId <고유 ID> -Owner <GitHub 소유자> -Repository <저장소> -Architecture <any|x86|x64|arm64>`로 한 번 수행한다. 등록부는 PC의 AutoUpdate 상태 폴더에 저장되며 Git 저장소에 커밋되지 않는다. `tools/install-background.ps1`은 로그인 시작 폴더에서 소스 동기화와 등록 앱 업데이트 확인을 숨김 백그라운드로 실행한다. 앱마다 `outbox/apps/<AppId>/build.json`을 한 번 준비하면 작업자는 10분마다 명시한 payload 파일의 해시를 확인한다. 소스가 바뀌면 불변 패키지를 만들고 로컬·GitHub 최신 버전보다 patch 번호를 올린다. 소스가 그대로면 건너뛴다. 새 로컬 패키지는 초안 릴리스로 게시하고 manifest와 원격 파일의 크기·SHA-256을 확인한 뒤 공개한다. GitHub가 더 새 버전이면 내려받아 검증 후 공유 outbox와 앱 상태 경로에 저장한다. 결과는 사용자별 AutoUpdate 상태 폴더의 `logs/app-updates.jsonl`에 남으며, 각 행의 `engine_version`은 해당 검사를 실제 처리한 공용 엔진 버전을 기록한다. 릴리스 생성에는 등록 저장소의 GitHub Contents 쓰기 권한이 필요하다. 실제 실행 중 live 패치·상태 보존 재시작에는 앱 연결부가 별도로 필요하다.
 
-프로덕션 배포는 설정된 비공개 GitHub 저장소의 release asset과 정상 HTTPS 검증을 사용한다. PAT는 `AutoUpdate/github` Windows 자격 증명 대상에서 읽어야 하며 명령행·설정·로그·패키지에 쓰지 않는다. 최소 저장소와 최소 권한만 허용한다. 로컬 `PackageRoot` 설치는 격리된 검증에만 사용한다. 소스 Git 동기화는 커밋 그래프를 기준으로 fast-forward만 적용하고, 분기 시 양쪽 이력을 보존한 채 멈춘다.
+프로덕션 GitHub 릴리스는 HTTPS와 AutoUpdate/github 자격 증명으로 검증합니다. 공유 outbox의 로컬 후보는 원격 확인이 실패해도 해시 검증 후 현재 버전보다 높을 때만 적용하고 다음 주기에 GitHub를 다시 확인합니다. 임의 PackageRoot 직접 설치는 격리 검증에만 사용합니다. 소스 Git 동기화는 커밋 그래프 기준 fast-forward만 적용하고, 분기 시 양쪽 이력을 보존한 채 멈춥니다.
 
 ## 현재 구현 상태 (2026-10-26 확인)
 
-- **공용 업데이트 엔진:** 5600G에는 AutoUpdate `0.1.1806`가 설치되어 있습니다. 현재 정책은 10분이며, 로그인 시 숨김 백그라운드 작업자가 소스 Git 동기화와 등록 앱 업데이트를 확인합니다. 엔진 자체의 build recipe는 공유 코어, 연결 CLI, 재시작 도우미를 하나의 검증 패키지로 묶습니다.
+- **공용 업데이트 엔진:** 5600G와 H255 모두 AutoUpdate 0.1.1807을 설치했고, 현재 포인터의 manifest와 3개 payload 해시 검증이 통과했습니다. 정책은 10분입니다. 5600G는 새 버전을 안정 GitHub 릴리스로 게시한 뒤 같은 주기에서 설치하고 엔진을 hot-reload했습니다. H255는 GitHub 자격 증명이 없어 공유 로컬 패키지로 설치한 뒤 같은 방식으로 엔진을 다시 불러왔습니다.
 - **GitHub rate limit 처리:** 읽기 요청은 403/429 응답에서 Retry-After 또는 X-RateLimit-Reset 헤더를 따르고, 보조 제한이면 1분부터 지수형으로 최대 3회 재시도합니다. 일반 권한 오류는 지연 재시도하지 않으며, 상태를 변경하는 POST/PATCH/DELETE는 같은 주기 안에서 자동 재전송하지 않습니다.
-- **5600G의 앱 상태:** 등록 앱 5개는 `AutoUpdate`, `BASE-001`, `github-auto-maker`, `re-sleeving`, `workboard`입니다. 2026-10-26 01:38 KST 주기에서 AutoUpdate가 `0.1.1806`으로 자기 업데이트 후 같은 주기의 나머지 네 앱(`BASE-001`, `github-auto-maker`, `re-sleeving`, `workboard`)을 모두 `already-current`로 확인했습니다. 전체 5개 등록 앱이 정상 처리됐습니다.
-- **공용 모듈:** `AutoUpdate` 모듈 `1.0.1`이 공유폴더 `outbox/modules`에 불변 버전으로 게시돼 있습니다. `app-base`, `github-auto-maker`, `re-sleeving`, `workboard`의 매니페스트가 API 1 의존성을 선언합니다. 5600G에서 네 매니페스트를 각각 resolve해 모두 `1.0.1`, `verified=true`를 확인했고 같은 PC 캐시를 재사용했습니다.
-- **검증:** 2026-10-26에 `tools/test-all.ps1`의 18개 테스트가 모두 통과했습니다. 두 앱 ID와 두 PC 캐시가 하나의 모듈 게시에서 새 호환 버전을 받고 이전 버전을 보존하는 fan-out 회귀시험도 포함합니다.
-- **H255 교차검증:** H255에는 `AutoUpdate`와 `re-sleeving`이 등록돼 있지만, 5600G에서 확인 가능한 최신 H255 로그(2026-10-26 01:54:46 KST)에서도 두 앱의 GitHub 빌드·게시·설치가 `Missing Windows credential target AutoUpdate/github`로 실패했습니다. H255의 설치 포인터는 엔진 상태 파일이 없고 모듈은 아직 `1.0.0`입니다. 토큰은 읽거나 옮기지 않았습니다. H255의 Credential Manager에 이 자격 증명이 등록된 뒤 다음 업데이트 주기를 확인해야 합니다.
+- **5600G의 앱 상태:** 등록 앱 5개는 AutoUpdate, BASE-001, github-auto-maker, re-sleeving, workboard입니다. 2026-10-26 02:58 KST 주기에서 AutoUpdate가 0.1.1807로 자체 업데이트·hot-reload한 뒤 새 엔진이 나머지 네 앱을 모두 already-current로 확인했습니다.
+- **공용 모듈:** AutoUpdate 모듈 1.0.2가 공유폴더 outbox/modules에 불변 버전으로 게시됐습니다. app-base, github-auto-maker, re-sleeving, workboard 매니페스트가 API 1 의존성을 선언합니다. 5600G의 BASE-001·github-auto-maker·re-sleeving과 H255의 re-sleeving resolver가 모두 1.0.2, verified=true를 반환했고 각 PC 공용 캐시를 사용합니다.
+- **검증:** 2026-10-26에 tools/test-all.ps1의 18개 테스트 스크립트가 모두 통과했습니다. 원격 조회 실패 시 로컬 fallback, 무다운그레이드, 동일 버전 내용 충돌 보존, 모듈 fan-out, 엔진 자체 업데이트와 worker hot-reload 시험을 포함합니다.
+- **H255 교차검증:** H255에는 AutoUpdate와 re-sleeving이 등록돼 있습니다. 2026-10-26 02:54 KST 주기에서 AutoUpdate 0.1.1807을 공유 로컬 패키지로 적용하고 payload 3개 검증 및 엔진 hot-reload까지 통과했습니다. re-sleeving 1.0.30도 로컬 후보 기준 already-current입니다. H255에는 여전히 AutoUpdate/github 자격 증명이 없어 GitHub 비교·게시 로그는 실패하지만 로컬 업데이트는 정상 진행됩니다. 토큰은 읽거나 옮기지 않았습니다.
 - **모듈 배포 범위:** 현재 모듈은 로컬 공유폴더 파일럿이며 GitHub 모듈 게시·다운로드는 연결하지 않았습니다. 새 모듈 포인터가 올라오면 앱은 업데이트 확인 시 resolver를 호출해 PC 공용 캐시에서 검증된 버전을 받습니다. 이미 실행 중인 코드는 자동으로 메모리에서 바뀌지 않으므로 앱의 안전 재로딩 계약이나 상태 저장·복원 재시작 연결이 필요합니다.
-- **남은 검증:** H255에 자격 증명을 등록한 뒤 두 PC 모두에서 최신 엔진·앱 상태를 재확인하고, 실제 프로그램 화면에서 앱별 live 적용 또는 상태 복원 재시작을 확인합니다. 현재 확인은 테스트와 모듈 resolver 수준이며 실제 화면 적용 검증과 H255 GitHub 업데이트는 완료되지 않았습니다.
+- **남은 검증:** H255에서 GitHub 최신본 비교·게시까지 하려면 해당 PC의 AutoUpdate/github 자격 증명이 필요합니다. 실제 GUI 앱별 live 적용과 설정·화면 상태 복원 재시작은 별도 앱 수용 시험이 남아 있습니다. 엔진 자체의 패키지 검증·hot-reload와 helper rollback은 자동 시험으로 확인했습니다.
 
 공유 AutoUpdate 엔진과 로컬 모듈 배포 경로는 검증됐습니다. 기존 앱의 최초 공용 런타임/모듈 연결은 앱마다 한 번 필요하며, 이후 공용 모듈 변경은 연결된 앱의 다음 resolver 확인 때 새 버전으로 전달됩니다. MA는 포함하지 않습니다.
 ## 사용 예
