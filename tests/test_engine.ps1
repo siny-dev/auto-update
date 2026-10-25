@@ -28,6 +28,8 @@ try {
     $current=Get-AuCurrent -StateRoot $state -AppId demo
     Assert ($current.Version -eq '1.0.1') 'atomic pointer did not activate latest package'
     Assert ((Get-Content -Raw -LiteralPath (Join-Path $state 'apps/demo/previous.json') | ConvertFrom-Json).version -eq '1.0.0') 'previous pointer was not preserved'
+    $same=Install-AuPackage -PackageRoot $p2 -StateRoot $state -AppId demo -Architecture x64
+    Assert ($same.Status -eq 'already-current') 'same-version install was not idempotent'
 
     $p3=New-TestPackage '1.0.2' 'bad-hash'
     $m=Get-Content -Raw -LiteralPath (Join-Path $p3 'manifest.json') | ConvertFrom-Json

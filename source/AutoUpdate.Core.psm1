@@ -145,6 +145,11 @@ function Install-AuLatestRelease {
     Test-AuManifest -Manifest $manifest -ExpectedAppId $AppId | Out-Null
     if ($manifest.architecture -ne 'any' -and $manifest.architecture -ne $Architecture) { throw 'Release architecture mismatch.' }
     if ($release.tag_name -ne ('v'+$manifest.version)) { throw 'Release tag and manifest version do not match.' }
+    $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+    if ($current -and $current.Version -eq [string]$manifest.version) {
+        return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=[string]$manifest.version;Path=$current.Path;Mode=[string]$manifest.mode}
+    }
+    if ($current -and ([version]$manifest.version -lt [version]$current.Version)) { throw 'Downgrades are blocked by default.' }
     $assetMap=@{};foreach($asset in $release.assets){if($assetMap.ContainsKey([string]$asset.name)){throw 'Release contains duplicate asset names.'};$assetMap[[string]$asset.name]=$asset}
     $downloadRoot=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-release-'+[guid]::NewGuid().ToString('N'))
     $payloadRoot=Join-Path $downloadRoot 'payload';[void][IO.Directory]::CreateDirectory($payloadRoot)

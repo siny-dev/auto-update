@@ -10,7 +10,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `contracts/`: 앱 연결부와 패키지 규약.
 - `packages/`: 승인된 엔진·앱 패키지의 개발 산출물.
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
-- `tools/autoupdate.ps1`: 설치·상태 조회 명령줄 진입점.
+- `tools/autoupdate.ps1`: 설치·상태 조회 명령줄 진입점. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
 - `state/`, `logs/`: PC별 상태와 로그. 저장소에 올리지 않는다.
 
