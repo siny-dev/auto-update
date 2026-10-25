@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "autoupdate-app-modules-v1.schema.json",
+  "title": "AutoUpdate app module requirements v1",
+  "type": "object",
+  "required": ["schema", "contract", "app_id", "modules"],
+  "properties": {
+    "schema": { "const": 1 },
+    "contract": { "const": "autoupdate-app-modules-v1" },
+    "app_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["module_id", "api_major"],
+        "properties": {
+          "module_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+          "api_major": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

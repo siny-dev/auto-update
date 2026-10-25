@@ -24,6 +24,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분 시작 간격으로 수행하는 공용 작업자. 각 주기 처리시간을 빼서 시작 간격 누적 지연을 막는다. AutoUpdate 자체가 새 패키지를 받으면 같은 주기 안에서 새 코어 모듈을 다시 불러온 뒤 나머지 등록 앱을 처리한다. 작업자 스크립트 자체가 공유 폴더에서 바뀌면 다음 확인 주기 뒤 숨김으로 새 프로세스를 이어 실행한다.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 선언된 파일이 바뀌거나 원격보다 로컬 패키지 버전이 낮으면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
+- `tools/build-module-package.ps1`: 모듈 소스 폴더를 불변 버전 패키지로 만들고 파일별 크기와 SHA-256을 기록한다. 코드 파일은 기본적으로 `restart` 모드로 분류하며, 라이브 모듈에는 앱의 실제 재로딩 계약이 필요하다.
 - `outbox/apps/<AppId>/build.json`: 앱별 1회 빌드 연결 설정. AutoUpdate 자체도 `outbox/apps/AutoUpdate/build.json`으로 `source/AutoUpdate.Core.psm1`, `tools/autoupdate.ps1`, `tools/restart-apply.ps1` 변경을 감지해 공통 엔진·앱 연결 CLI·재시작 도우미를 함께 패키징한다. 빌드 산출물은 C: 임시 폴더에서 공유폴더로 원자 이동할 수 없으므로 대상 볼륨에 임시 복사한 뒤 같은 볼륨에서 이름을 확정한다.
 - `outbox/apps/<AppId>/<version>/`: 각 앱의 로컬 빌드 패키지 후보. 새 버전 폴더는 불변으로 두며 로컬 확인 시 GitHub의 최신 릴리스와 함께 비교한다. 이 경로는 공유폴더에만 두고 Git 동기화 대상에서는 제외한다.
 - `tools/register-app.ps1`: 프로그램을 공용 업데이트 목록에 한 번 등록하는 연결 명령.
@@ -38,6 +39,14 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 ## 연결과 인증
 
 각 앱은 한 번만 얇은 연결부를 추가해 공용 엔진의 `Get-AuVerifiedCurrent`로 검증된 버전 경로를 읽고 앱별 훅을 제공한다. 이후 공용 엔진 업데이트는 연결된 앱들이 정해진 안전 경계에서 새 엔진 버전을 로드하게 한다. 이미 엔진이 각 실행 파일에 복사되어 있는 앱은 연결부 전환과 호환 검증을 한 번 거쳐야 한다. 연결되지 않은 앱에 공용 엔진 수정이 저절로 도달한다고 간주하지 않는다.
+
+## 공유 모듈
+
+반복해서 여러 프로그램이 쓰는 기능은 앱 패키지에 복사하지 않고 모듈 ID와 API 주 버전을 선언해 불러온다. 모듈 버전은 `outbox/modules/<ModuleId>/versions/<version>/`에 불변으로 게시하고, `current.json` 포인터는 검증을 끝낸 뒤 마지막에 바꾼다. 각 PC는 처음 사용할 때 모듈을 `%LOCALAPPDATA%\Siny\AutoUpdate\modules\<ModuleId>\versions\<version>`에 한 번 내려받고, 같은 PC의 프로그램들은 같은 캐시 경로를 사용한다. 다른 API 주 버전의 모듈이 게시되어도 각 앱은 요구한 API와 맞는 가장 높은 검증 버전을 고른다.
+
+모듈을 수정해 게시하면 연결된 앱은 다음 공용 업데이트 확인 때 새 호환 버전을 내려받는다. 이미 실행 중인 코드가 자동으로 메모리에서 교체되지는 않는다. 앱 연결부가 모듈을 다시 불러올 안전 시점과 UI·작업 상태 복원을 구현해야 잠수함 패치가 실제 동작한다. 재로딩이 불가능한 코드는 모듈 manifest에서 `restart`로 처리하고 기존 상태 저장·복구 재시작 경로를 쓴다. 모든 기존 프로그램이 자동으로 모듈을 쓰게 되는 것은 아니며, 프로그램마다 의존성 선언과 활성화 연결을 한 번 적용해야 한다.
+
+현재 모듈 게시 정책은 공유폴더 로컬 파일럿이다. GitHub 배포는 아직 연결하지 않았다. 파일 해시 검증은 손상과 같은 버전의 내용 충돌을 찾아내며, 원격 게시자 인증은 별도 배포 단계에서 추가한다. 모듈 manifest와 앱 의존성 규약은 `contracts/modules.md` 및 JSON schema에 정리했다.
 
 등록은 `tools/register-app.ps1 -AppId <고유 ID> -Owner <GitHub 소유자> -Repository <저장소> -Architecture <any|x86|x64|arm64>`로 한 번 수행한다. 등록부는 PC의 AutoUpdate 상태 폴더에 저장되며 Git 저장소에 커밋되지 않는다. `tools/install-background.ps1`은 로그인 시작 폴더에서 소스 동기화와 등록 앱 업데이트 확인을 숨김 백그라운드로 실행한다. 앱마다 `outbox/apps/<AppId>/build.json`을 한 번 준비하면 작업자는 10분마다 명시한 payload 파일의 해시를 확인한다. 소스가 바뀌면 불변 패키지를 만들고 로컬·GitHub 최신 버전보다 patch 번호를 올린다. 소스가 그대로면 건너뛴다. 새 로컬 패키지는 초안 릴리스로 게시하고 manifest와 원격 파일의 크기·SHA-256을 확인한 뒤 공개한다. GitHub가 더 새 버전이면 내려받아 검증 후 공유 outbox와 앱 상태 경로에 저장한다. 결과는 사용자별 AutoUpdate 상태 폴더의 `logs/app-updates.jsonl`에 남으며, 각 행의 `engine_version`은 해당 검사를 실제 처리한 공용 엔진 버전을 기록한다. 릴리스 생성에는 등록 저장소의 GitHub Contents 쓰기 권한이 필요하다. 실제 실행 중 live 패치·상태 보존 재시작에는 앱 연결부가 별도로 필요하다.
 
@@ -70,6 +79,14 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 검증된 로컬 패키지를 설치하는 명령은 다음 형태다.
 
 `tools/autoupdate.ps1 -Command install -PackageRoot <검증용 패키지 폴더> -StateRoot <앱 데이터 경로> -AppId <앱 ID> -Architecture x64`
+
+공유 모듈은 아래 순서로 로컬 게시·확인한다. `ModuleSourceRoot` 기본값은 `\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules`다. 각 앱은 `app.json`에 `autoupdate-app-modules-v1` 의존성 목록을 두고, 다음 확인 주기에 `resolve-modules`를 불러 검증된 PC 공용 캐시 경로를 받는다.
+
+```powershell
+.\tools\build-module-package.ps1 -ModuleId Speakly -Version 1.0.0 -ApiMajor 1 -SourceRoot <모듈-소스> -OutputRoot <새-패키지-폴더> -ActivationMode restart
+.\tools\autoupdate.ps1 -Command publish-module -ModuleId Speakly -PackageRoot <새-패키지-폴더>
+.\tools\autoupdate.ps1 -Command resolve-modules -AppManifestPath <앱의-app.json> -StateRoot <PC 공용 AutoUpdate 상태 경로>
+```
 
 `app-base` 템플릿에는 공용 연결부가 포함되어 있으며 앱은 실행 후 공용 상태 저장소에 자동 등록된다. 등록부는 PC별이므로 실제 전파 대상을 확인하려면 해당 PC의 `%LOCALAPPDATA%\Siny\AutoUpdate\registry\apps.json`과 `logs\app-updates.jsonl`을 확인한다. 기존 자체 업데이터 앱은 한 번 공용 연결부를 적용해야 하며, 미등록 앱은 자동으로 업데이트되지 않는다.
 

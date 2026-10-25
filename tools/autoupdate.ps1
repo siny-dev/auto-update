@@ -1,11 +1,14 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register')][string]$Command,
+    [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register','publish-module','resolve-modules')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$AppId='AutoUpdate',
     [ValidateSet('x86','x64','arm64')][string]$Architecture='x64',
     [string]$Owner,
-    [string]$Repository
+    [string]$Repository,
+    [string]$ModuleId,
+    [string]$ModuleSourceRoot='\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules',
+    [string]$AppManifestPath
 )
 $ErrorActionPreference='Stop'
 $sourceModule=Join-Path $PSScriptRoot '..\source\AutoUpdate.Core.psm1'
@@ -19,7 +22,8 @@ if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
     if($engineEntry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    if(Select-String -LiteralPath $candidate -SimpleMatch 'function Get-AuVerifiedCurrent' -Quiet){$sourceModule=$candidate}
+    $requiredFunction=switch($Command){'publish-module'{'function Publish-AuLocalModulePackage'}'resolve-modules'{'function Resolve-AuAppModules'}default{'function Get-AuVerifiedCurrent'}}
+    if(Select-String -LiteralPath $candidate -SimpleMatch $requiredFunction -Quiet){$sourceModule=$candidate}
 }
 Import-Module $sourceModule -Force
 try {
@@ -37,6 +41,12 @@ try {
     } elseif ($Command -eq 'register') {
         if([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($Repository)){throw 'Owner and Repository are required for registration.'}
         $result = Register-AuApplication -StateRoot $StateRoot -AppId $AppId -Owner $Owner -Repository $Repository -Architecture $Architecture
+    } elseif ($Command -eq 'publish-module') {
+        if([string]::IsNullOrWhiteSpace($PackageRoot) -or [string]::IsNullOrWhiteSpace($ModuleSourceRoot) -or [string]::IsNullOrWhiteSpace($ModuleId)){throw 'PackageRoot, ModuleSourceRoot, and ModuleId are required for publish-module.'}
+        $result = Publish-AuLocalModulePackage -PackageRoot $PackageRoot -ModuleSourceRoot $ModuleSourceRoot -ModuleId $ModuleId
+    } elseif ($Command -eq 'resolve-modules') {
+        if([string]::IsNullOrWhiteSpace($AppManifestPath) -or [string]::IsNullOrWhiteSpace($ModuleSourceRoot)){throw 'AppManifestPath and ModuleSourceRoot are required for resolve-modules.'}
+        $result = Resolve-AuAppModules -AppManifestPath $AppManifestPath -ModuleSourceRoot $ModuleSourceRoot -StateRoot $StateRoot
     } else {
         $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
