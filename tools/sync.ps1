@@ -1,4 +1,4 @@
-param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$MutexName='Local\AutoUpdateSourceSync')
+param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$MutexName='Local\AutoUpdateSourceSync',[ValidateRange(0,300000)][int]$SharedLockTimeoutMilliseconds=60000)
 $ErrorActionPreference='Stop'
 $script:GitExe=(Get-Command git.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source
 if(-not $script:GitExe){$candidate='C:\Program Files\Git\cmd\git.exe';if(Test-Path -LiteralPath $candidate){$script:GitExe=$candidate}}
@@ -10,6 +10,7 @@ if(-not (Get-Command git.exe -ErrorAction SilentlyContinue)){
 }
 $Root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'read-update-policy.ps1')
+. (Join-Path $PSScriptRoot 'shared-cycle-lock.ps1')
 $Logs=Join-Path $Root 'logs'
 $LogFile=Join-Path $Logs 'sync.log'
 [void][IO.Directory]::CreateDirectory((Join-Path $Root 'state'))
@@ -144,8 +145,13 @@ try{
    }catch{Write-Log 'WATCHER unavailable; periodic checks remain enabled';if($watcher){$watcher.Dispose();$watcher=$null}}
   }
   do{
-   try{$code=Sync-Once}
-   catch{Write-Log ('SYNC_RETRY unexpected error: '+$_.Exception.GetType().Name);if($Once){$code=35}}
+   $sharedLock=$null
+   try{
+    $sharedLockPath=Join-Path $Root 'outbox\locks\source-sync.lock'
+    $sharedLock=Enter-AuSharedCycleLock -Path $sharedLockPath -TimeoutMilliseconds $SharedLockTimeoutMilliseconds
+    if($null -eq $sharedLock){Write-Log 'SKIP shared source-sync lock timeout; retry at next interval';$code=36}
+    else{try{$code=Sync-Once}finally{Exit-AuSharedCycleLock -LockHandle $sharedLock}}
+   }catch{Write-Log ('SYNC_RETRY unexpected error: '+$_.Exception.GetType().Name);if($Once){$code=35}}
    if($Once){break}
    if($code -eq 0){$delayMinutes=Get-AuUpdatePolicyInterval -PolicyPath (Join-Path $Root 'config\update-policy.json') -FallbackMinutes $IntervalMinutes;$retryMinutes=1}
    else{$delayMinutes=$retryMinutes;$retryMinutes=[Math]::Min(30,$retryMinutes*2)}

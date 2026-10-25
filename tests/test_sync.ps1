@@ -35,6 +35,7 @@ try{
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/sync.ps1') -Destination (Join-Path $local 'tools/sync.ps1')
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/credential-helper.ps1') -Destination (Join-Path $local 'tools/credential-helper.ps1')
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/read-update-policy.ps1') -Destination (Join-Path $local 'tools/read-update-policy.ps1')
+ Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/shared-cycle-lock.ps1') -Destination (Join-Path $local 'tools/shared-cycle-lock.ps1')
  [IO.File]::WriteAllText((Join-Path $local 'source/local.txt'),'local')
  . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('local-ahead push failed exit='+$syncCode)
@@ -45,6 +46,19 @@ $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('local-ahead p
  Invoke-TestGit -At $other -GitArguments @('add','--all')|Out-Null;Invoke-TestGit -At $other -GitArguments @('commit','-m','remote change')|Out-Null;Invoke-TestGit -At $other -GitArguments @('push','origin','main')|Out-Null
  . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('remote-ahead fast-forward failed exit='+$syncCode)
+ $sharedLockPath=Join-Path $local 'outbox\locks\source-sync.lock'
+ $sharedHandle=Enter-AuSharedCycleLock -Path $sharedLockPath -TimeoutMilliseconds 0
+ if($null -eq $sharedHandle){throw 'Could not acquire the free source-sync test lock.'}
+ try{
+  . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName -SharedLockTimeoutMilliseconds 0
+  Check ($global:AutoUpdateSyncLastExit -eq 36) 'source-sync did not yield when another PC held the shared Git lock'
+ }finally{Exit-AuSharedCycleLock -LockHandle $sharedHandle}
+ . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
+ Check ($global:AutoUpdateSyncLastExit -eq 0) 'source-sync did not resume after the shared lock was released'
+ $lockLog=[IO.File]::ReadAllText((Join-Path $local 'logs/sync.log'))
+ Check ($lockLog.Contains('SKIP shared source-sync lock timeout')) 'shared lock contention was not logged'
+ Write-Output 'PASS: source sync serializes shared Git operations and retries after releasing the lock'
+
  [IO.File]::WriteAllText((Join-Path $local 'source/local-diverged.txt'),'local')
  [IO.File]::WriteAllText((Join-Path $other 'source/remote-diverged.txt'),'remote')
  Invoke-TestGit -At $other -GitArguments @('add','--all')|Out-Null;Invoke-TestGit -At $other -GitArguments @('commit','-m','remote divergent')|Out-Null;Invoke-TestGit -At $other -GitArguments @('push','origin','main')|Out-Null

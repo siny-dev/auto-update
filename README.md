@@ -21,7 +21,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `tools/autoupdate.ps1`: 설치·상태 조회·앱 등록 및 앱 연결용 JSON resolve 명령줄 진입점. `tools/restart-apply.ps1`은 예외 재시작 때 저장된 상태를 전달하고 실행 파일을 교체한 뒤, 새 앱의 복원 확인 전이면 이전 실행본으로 롤백한다. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. AutoUpdate 자체 v0.1.1402는 세 공용 런타임 파일로 자동 게시·설치됐고, 설치본 도우미의 성공·롤백 시험을 통과했다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/build-engine-release.ps1`: GitHub 배포에서 공유 엔진, 앱 연결 CLI, 재시작 도우미를 한 개의 불변 패키지로 묶는다. `tests/test_engine_release.ps1`은 세 파일이 모두 같은 매니페스트·해시 검증·설치 절차를 거치는지 확인한다.
 - `tools/test-all.ps1`: `tests/test_*.ps1`을 각각 격리된 PowerShell 프로세스로 실행하고 실제 종료 코드를 확인한다. 모든 회귀시험과 자체 업데이트 전파 시험을 CI와 엔진 게시 전에 실행한다.
-- `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
+- `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자. PC 내부 mutex와 공유 source-sync 파일 잠금을 함께 사용해 두 PC가 같은 공유 Git 저장소를 동시에 조작하지 않게 한다.
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분 시작 간격으로 수행하는 공용 작업자. 각 주기 처리시간을 빼서 시작 간격 누적 지연을 막는다. 공유 outbox 잠금으로 두 PC의 패키지 게시·설치 주기가 겹치지 않게 직렬화하고, 잠금을 얻지 못한 PC는 다음 주기에 다시 확인한다. AutoUpdate 자체가 새 패키지를 받으면 같은 주기 안에서 새 코어 모듈을 다시 불러온 뒤 나머지 등록 앱을 처리한다. 작업자 스크립트 자체가 공유 폴더에서 바뀌면 다음 확인 주기 뒤 숨김으로 새 프로세스를 이어 실행한다.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 선언된 파일이 바뀌거나 원격보다 로컬 패키지 버전이 낮으면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
 - `tools/build-module-package.ps1`: 모듈 소스 폴더를 불변 버전 패키지로 만들고 파일별 크기와 SHA-256을 기록한다. 코드 파일은 기본적으로 `restart` 모드로 분류하며, 라이브 모듈에는 앱의 실제 재로딩 계약이 필요하다.
