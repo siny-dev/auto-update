@@ -41,7 +41,16 @@ try{
         [IO.File]::Copy($source,$target,$false)
     }
     & (Join-Path $PSScriptRoot 'build-module-package.ps1') -ModuleId AutoUpdate -Version $version -ApiMajor 1 -MinimumEngine '0.1.0' -SourceRoot $sourceRoot -OutputRoot $package -ActivationMode restart | Out-Null
-    Import-Module (Join-Path $root 'source\AutoUpdate.Core.psm1') -Force
+    $core=Join-Path $root 'source\AutoUpdate.Core.psm1'
+    $requiredEngineFunctions=@('Publish-AuLocalModulePackage')
+    $loadedEngine=Get-Module -Name 'AutoUpdate.Core' -ErrorAction SilentlyContinue|Select-Object -First 1
+    $engineApiReady=$false
+    if($loadedEngine){
+        $availableFunctions=@(Get-Command -Module $loadedEngine.Name -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)
+        $engineApiReady=@($requiredEngineFunctions|Where-Object{$_ -notin $availableFunctions}).Count -eq 0
+    }
+    # Publishing a module must not downgrade the engine used by the current worker cycle.
+    if(-not $engineApiReady){Import-Module $core -Force -Scope Local}
     $result=Publish-AuLocalModulePackage -PackageRoot $package -ModuleSourceRoot $ModuleSourceRoot -ModuleId AutoUpdate
     [pscustomobject]@{status=[string]$result.Status;module_id='AutoUpdate';version=$version;message=[string]$result.Message}|ConvertTo-Json -Compress
 }finally{

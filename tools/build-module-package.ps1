@@ -11,7 +11,15 @@ param(
 $ErrorActionPreference='Stop'
 $repoRoot=Split-Path -Parent $PSScriptRoot
 $core=Join-Path $repoRoot 'source\AutoUpdate.Core.psm1'
-Import-Module $core -Force
+$requiredEngineFunctions=@('Test-AuModuleManifest','Get-AuFileSha256')
+$loadedEngine=Get-Module -Name 'AutoUpdate.Core' -ErrorAction SilentlyContinue|Select-Object -First 1
+$engineApiReady=$false
+if($loadedEngine){
+    $availableFunctions=@(Get-Command -Module $loadedEngine.Name -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)
+    $engineApiReady=@($requiredEngineFunctions|Where-Object{$_ -notin $availableFunctions}).Count -eq 0
+}
+# Keep the worker's verified installed engine loaded when packaging a module.
+if(-not $engineApiReady){Import-Module $core -Force -Scope Local}
 $source=[IO.Path]::GetFullPath($SourceRoot)
 $output=[IO.Path]::GetFullPath($OutputRoot)
 if(-not (Test-Path -LiteralPath $source -PathType Container)){throw 'Module SourceRoot does not exist.'}
