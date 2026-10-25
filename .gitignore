@@ -3,6 +3,11 @@
 /logs/
 /outbox/*
 !/outbox/.gitkeep
+!/outbox/apps/
+/outbox/apps/*
+!/outbox/apps/re-sleeving/
+/outbox/apps/re-sleeving/*
+!/outbox/apps/re-sleeving/build.json
 # Credentials and local machine configuration
 *.token
 credentials*
