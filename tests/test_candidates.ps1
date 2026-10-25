@@ -43,6 +43,26 @@ try{
     Assert ($sameContent.Status -eq 'already-current') 'same-version identical installed package was not recognized'
     $sameVersionConflict=Install-AuPackage -PackageRoot (Join-Path $testRoot 'conflicting') -StateRoot (Join-Path $testRoot 'state') -AppId demo -Architecture x64
     Assert ($sameVersionConflict.Status -eq 'conflict') 'same-version changed installed package was silently accepted'
+    $module=Get-Module AutoUpdate.Core|Select-Object -Last 1
+    $remoteLookup=& $module {(Get-Item Function:\Get-AuLatestReleaseManifest).ScriptBlock}
+    & $module {Set-Item Function:\Get-AuLatestReleaseManifest -Value {throw 'Missing Windows credential target AutoUpdate/github.'}}
+    try{
+        $offlineState=Join-Path $testRoot 'offline-state'
+        $offline=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId demo -StateRoot $offlineState -Architecture x64 -LocalPackageRoot $localRoot
+        Assert ($offline.Status -eq 'staged' -and $offline.Version -eq '1.0.2') 'verified local package was not installed when GitHub was unavailable'
+        Assert ($offline.Message -match 'GitHub could not be checked' -and $offline.Message -match 'next cycle') 'offline local install did not report that GitHub will be retried'
+        $newerState=Join-Path $testRoot 'newer-state'
+        Install-AuPackage -PackageRoot (Join-Path $testRoot 'remote-newer') -StateRoot $newerState -AppId demo -Architecture x64|Out-Null
+        $noDowngrade=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId demo -StateRoot $newerState -Architecture x64 -LocalPackageRoot $localRoot
+        Assert ($noDowngrade.Status -eq 'already-current' -and $noDowngrade.Version -eq '1.0.3') 'offline local fallback downgraded a newer installed version'
+        $conflictState=Join-Path $testRoot 'offline-conflict-state'
+        Install-AuPackage -PackageRoot (Join-Path $testRoot 'conflicting') -StateRoot $conflictState -AppId demo -Architecture x64|Out-Null
+        $offlineConflict=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId demo -StateRoot $conflictState -Architecture x64 -LocalPackageRoot $localRoot
+        Assert ($offlineConflict.Status -eq 'conflict') 'offline local fallback overwrote different contents with the same version'
+        'PASS: verified local update during GitHub outage, retry visibility, no downgrade, and same-version conflict preservation'
+    }finally{
+        & $module {param($lookup) Set-Item Function:\Get-AuLatestReleaseManifest -Value $lookup} $remoteLookup
+    }
     'PASS: highest local version, GitHub/local winner, same-hash equality, same-version conflict, and local staging'
     $module=Get-Module AutoUpdate.Core | Select-Object -Last 1
     $legacyRelease=[pscustomobject]@{assets=@([pscustomobject]@{name='workboard.exe';size=123})}

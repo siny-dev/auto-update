@@ -562,7 +562,26 @@ function Install-AuLatestAvailable {
         [Parameter(Mandatory=$true)][string]$Architecture,[Parameter(Mandatory=$true)][string]$LocalPackageRoot
     )
     $local=Get-AuLatestLocalPackage -PackageRoot $LocalPackageRoot -AppId $AppId -Architecture $Architecture
-    $remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture
+    $remote=$null
+    $remoteError=$null
+    try{$remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture}catch{$remoteError=$_.Exception.Message}
+    if($remoteError){
+        if(-not $local){throw $remoteError}
+        $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+        if($current -and [version]$current.Version -gt [version]$local.Manifest.version){
+            return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode;Message=('GitHub could not be checked; the installed version is newer than the available local package. The next update cycle will retry. '+$remoteError)}
+        }
+        if($current -and [string]$current.Version -ceq [string]$local.Manifest.version){
+            $installedManifest=Get-Content -Raw -LiteralPath (Join-Path $current.Path 'manifest.json')|ConvertFrom-Json
+            if((Get-AuManifestFingerprint $installedManifest) -ceq (Get-AuManifestFingerprint $local.Manifest)){
+                return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode;Message=('GitHub could not be checked; the installed version matches the verified local package. The next update cycle will retry. '+$remoteError)}
+            }
+            return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$local.Manifest.version;Path=$current.Path;Mode=[string]$local.Manifest.mode;Message='The installed and local packages use the same version with different contents; both copies were preserved.'}
+        }
+        $localInstall=Install-AuPackage -PackageRoot $local.Path -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
+        $message=('GitHub could not be checked; installed the verified local package and will retry the remote check next cycle. '+$remoteError);Add-Member -InputObject $localInstall -NotePropertyName Message -NotePropertyValue $message -Force
+        return $localInstall
+    }
     if(-not $local){
         if(-not $remote){return [pscustomobject]@{Status='legacy-release';AppId=$AppId;Version=$null;Path=$null;Mode=$null;Message='The latest GitHub release has no AutoUpdate package manifest; waiting for a compatible package.'}}
         return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote -LocalPackageRoot $LocalPackageRoot
