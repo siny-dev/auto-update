@@ -329,6 +329,9 @@ function Publish-AuLocalPackage {
     $token=Get-AuCredentialToken;$base="https://api.github.com/repos/$Owner/$Repository/releases";$tag='v'+[string]$manifest.version;$existing=$null;$draft=$null
     try{
         try{$existing=Invoke-AuGitHubApiJson -Method GET -Uri ([uri]($base+'/tags/'+[uri]::EscapeDataString($tag))) -Token $token}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+        if($existing -and $existing.draft){
+            return [pscustomobject]@{Status='draft-exists';AppId=$AppId;Version=[string]$manifest.version;ReleaseUrl=$existing.html_url;Message='A draft release already uses this version; it was left untouched for review.'}
+        }
         if($existing){
             $publishedManifestAsset=@($existing.assets|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
             if($publishedManifestAsset.Count -eq 1){
@@ -345,11 +348,22 @@ function Publish-AuLocalPackage {
         $assets=Get-AuReleaseUploadPlan -PackageRoot $PackageRoot -Manifest $manifest
         $uploadUri=[uri]([string]$draft.upload_url -replace '\{\?name,label\}$','')
         foreach($asset in $assets){[void](Send-AuGitHubReleaseAsset -UploadUri $uploadUri -Token $token -Name $asset.Name -Path $asset.Path)}
-        $remoteManifestAsset=@((Invoke-AuGitHubApiJson -Method GET -Uri ([uri]($base+'/'+$draft.id+'/assets')) -Token $token)|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
+        $uploadedAssets=@(Invoke-AuGitHubApiJson -Method GET -Uri ([uri]($base+'/'+$draft.id+'/assets')) -Token $token)
+        if($uploadedAssets.Count -ne $assets.Count){throw 'Draft release has a missing or unexpected asset.'}
+        $uploadedMap=@{};foreach($asset in $uploadedAssets){if($uploadedMap.ContainsKey([string]$asset.name)){throw 'Draft release has duplicate asset names.'};$uploadedMap[[string]$asset.name]=$asset}
+        foreach($planned in $assets){if(-not $uploadedMap.ContainsKey($planned.Name) -or [long]$uploadedMap[$planned.Name].size -ne [long](Get-Item -LiteralPath $planned.Path).Length){throw "Draft release asset metadata does not match: $($planned.Name)"}}
+        $remoteManifestAsset=@($uploadedAssets|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
         if($remoteManifestAsset.Count -ne 1){throw 'Draft release manifest asset verification failed.'}
         $remoteBytes=Invoke-AuGitHubGet -Uri ([uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($remoteManifestAsset[0].id)") -Token $token -Accept 'application/octet-stream' -MaximumBytes 1048576
         $remoteManifest=[Text.Encoding]::UTF8.GetString($remoteBytes)|ConvertFrom-Json
         if((Get-AuManifestFingerprint $remoteManifest) -cne (Get-AuManifestFingerprint $manifest)){throw 'Published draft manifest differs from the verified local package.'}
+        foreach($entry in $manifest.files){
+            $uploaded=$uploadedMap[[string]$entry.asset];$tempAsset=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-upload-verify-'+[guid]::NewGuid().ToString('N'))
+            try{
+                Invoke-AuGitHubGet -Uri ([uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($uploaded.id)") -Token $token -Accept 'application/octet-stream' -OutFile $tempAsset -MaximumBytes ([long]$entry.size)|Out-Null
+                if((Get-Item -LiteralPath $tempAsset).Length -ne [long]$entry.size -or (Get-AuFileSha256 $tempAsset) -cne ([string]$entry.sha256).ToLowerInvariant()){throw "Uploaded release asset failed SHA-256 verification: $($entry.asset)"}
+            }finally{if(Test-Path -LiteralPath $tempAsset){Remove-Item -LiteralPath $tempAsset -Force -ErrorAction SilentlyContinue}}
+        }
         $published=Invoke-AuGitHubApiJson -Method PATCH -Uri ([uri]($base+'/'+$draft.id)) -Token $token -Body ([ordered]@{draft=$false})
         $draft=$null
         return [pscustomobject]@{Status='published';AppId=$AppId;Version=[string]$manifest.version;ReleaseUrl=$published.html_url;Message='Verified local package was published as a stable GitHub release.'}
