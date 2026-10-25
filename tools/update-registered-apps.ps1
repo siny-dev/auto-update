@@ -25,7 +25,7 @@ function Resolve-EngineModule{
     if($entry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $versionRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $entry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal','function Get-AuLatestReleaseManifest')
+    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Get-AuVerifiedCurrent','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal','function Get-AuLatestReleaseManifest')
     foreach($required in $requiredFunctions){if(-not (Select-String -LiteralPath $candidate -SimpleMatch $required -Quiet)){return $sourceModule}}
     return $candidate
 }

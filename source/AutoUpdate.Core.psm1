@@ -493,6 +493,26 @@ function Get-AuCurrent {
     return [pscustomobject]@{ AppId=$AppId; Version=[string]$active.version; Mode=[string]$active.mode; Path=$versionPath; Pointer=$active }
 }
 
+function Get-AuVerifiedCurrent {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId)
+    $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+    if(-not $current){return $null}
+    $manifestPath=Join-Path $current.Path 'manifest.json'
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'Active package manifest is missing.'}
+    if((Get-AuFileSha256 $manifestPath) -cne ([string]$current.Pointer.manifest_sha256).ToLowerInvariant()){throw 'Active package manifest hash is invalid.'}
+    $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+    Test-AuManifest -Manifest $manifest -ExpectedAppId $AppId|Out-Null
+    if([string]$manifest.version -cne $current.Version -or [string]$manifest.mode -cne $current.Mode){throw 'Active package pointer does not match its manifest.'}
+    foreach($entry in $manifest.files){
+        $filePath=Get-AuContainedPath $current.Path ([string]$entry.path)
+        if(-not (Test-Path -LiteralPath $filePath -PathType Leaf)){throw "Active package file is missing: $($entry.path)"}
+        $file=Get-Item -LiteralPath $filePath
+        if($file.Length -ne [long]$entry.size){throw "Active package size is invalid: $($entry.path)"}
+        if((Get-AuFileSha256 $filePath) -cne ([string]$entry.sha256).ToLowerInvariant()){throw "Active package hash is invalid: $($entry.path)"}
+    }
+    return [pscustomobject]@{AppId=$current.AppId;Version=$current.Version;Mode=$current.Mode;Path=$current.Path;Pointer=$current.Pointer;Manifest=$manifest;Verified=$true}
+}
 function Install-AuPackageUnlocked {
     [CmdletBinding()]
     param(
@@ -581,4 +601,4 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication

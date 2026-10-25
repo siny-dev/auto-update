@@ -19,7 +19,7 @@ if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
     if($engineEntry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $sourceModule=$candidate
+    if(Select-String -LiteralPath $candidate -SimpleMatch 'function Get-AuVerifiedCurrent' -Quiet){$sourceModule=$candidate}
 }
 Import-Module $sourceModule -Force
 try {
@@ -30,7 +30,7 @@ try {
         if([string]::IsNullOrWhiteSpace($Owner)){$Owner='siny-dev'};if([string]::IsNullOrWhiteSpace($Repository)){$Repository='auto-update'}
         $result = Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture
     } else {
-        $result = Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+        $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
     }
     $result | ConvertTo-Json -Depth 8 -Compress

@@ -66,6 +66,21 @@ function Get-NextPackageVersion([version]$Current){
     if($Current.Major -lt 2147483647){return '{0}.0.0' -f ($Current.Major+1)}
     throw 'Package version counter exhausted.'
 }
+function Copy-PackageDirectoryAtomically([string]$Source,[string]$Destination){
+    if(Test-Path -LiteralPath $Destination){throw 'Package destination already exists; packages are immutable.'}
+    $parent=Split-Path -Parent $Destination;[void][IO.Directory]::CreateDirectory($parent)
+    $temporary=Join-Path $parent ((Split-Path -Leaf $Destination)+'.'+[guid]::NewGuid().ToString('N')+'.part')
+    [void][IO.Directory]::CreateDirectory($temporary)
+    try{
+        foreach($child in (Get-ChildItem -LiteralPath $Source -Force)){
+            Copy-Item -LiteralPath $child.FullName -Destination $temporary -Recurse -Force
+        }
+        [IO.Directory]::Move($temporary,$Destination)
+    }catch{
+        if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue}
+        throw
+    }
+}
 $fingerprint=Get-RecipeFingerprint $spec $payloadRoot
 $architecture=[string]$spec.architecture;if($architecture -notin @('any','x86','x64','arm64')){throw 'Build recipe has an invalid architecture.'}
 $existingPackage=Get-AuLatestLocalPackage -PackageRoot $packageDirectory -AppId ([string]$spec.app_id) -Architecture $architecture
@@ -99,11 +114,11 @@ try{
         if($comparison -eq 'same'){$result=[pscustomobject]@{status='unchanged';app_id=$spec.app_id;version=$packageVersion;message='Identical package version already exists.'}}
         else{
             $conflictRoot=Join-Path $packageDirectory 'conflicts';[void][IO.Directory]::CreateDirectory($conflictRoot)
-            $conflict=Join-Path $conflictRoot ($packageVersion+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::Move($tempOutput,$conflict);$preserveOutput=$true
+            $conflict=Join-Path $conflictRoot ($packageVersion+'-'+[guid]::NewGuid().ToString('N'));Copy-PackageDirectoryAtomically $tempOutput $conflict;$preserveOutput=$true
             $result=[pscustomobject]@{status='conflict';app_id=$spec.app_id;version=$packageVersion;message='Same version contains different content; both package copies were preserved.'}
         }
     }else{
-        [IO.Directory]::Move($tempOutput,$target);$manifest=Get-Content -Raw -LiteralPath (Join-Path $target 'manifest.json')|ConvertFrom-Json
+        Copy-PackageDirectoryAtomically $tempOutput $target;$manifest=Get-Content -Raw -LiteralPath (Join-Path $target 'manifest.json')|ConvertFrom-Json
         Write-BuildState $statePath ([ordered]@{schema=1;app_id=[string]$spec.app_id;version=$packageVersion;source_fingerprint=$fingerprint;updated_utc=[DateTime]::UtcNow.ToString('o')})
         $result=[pscustomobject]@{status='built';app_id=$spec.app_id;version=$packageVersion;package_path=$target;message='Changed source files were packaged and validated.'}
     }
