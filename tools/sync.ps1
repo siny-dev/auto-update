@@ -1,4 +1,4 @@
-param([switch]$Once,[switch]$AllowFileRemote,[int]$IntervalMinutes=5)
+param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10)
 $ErrorActionPreference='Stop'
 $script:GitExe=(Get-Command git.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source
 if(-not $script:GitExe){$candidate='C:\Program Files\Git\cmd\git.exe';if(Test-Path -LiteralPath $candidate){$script:GitExe=$candidate}}
@@ -23,17 +23,20 @@ function Quote-ProcessArg([string]$Value){
  return '"' + $Value.Replace('"','\"') + '"'
 }
 function Invoke-Git([string[]]$GitArgs,[switch]$Network){
+ $safeRoot=if($Root.StartsWith('\\',[StringComparison]::Ordinal)){'%(prefix)///'+$Root.TrimStart([char[]]@('\')).Replace('\','/')}else{$Root}
+ $effectiveGitArgs=@('-c',('safe.directory='+$safeRoot))+$GitArgs
  $helperArgs=@()
  if($Network){
-  $helperPath=Join-Path $PSScriptRoot 'credential-helper.ps1'
-  $powershellExe=Join-Path $PSHOME 'powershell.exe'
-  $helper='!' + '"' + $powershellExe + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $helperPath + '"'
+  $powershellExe=Join-Path $PSHOME 'pwsh.exe'
+  if(-not (Test-Path -LiteralPath $powershellExe)){$powershellExe=Join-Path $PSHOME 'powershell.exe'}
+  if(-not (Test-Path -LiteralPath $powershellExe)){$powershellExe=(Get-Command pwsh.exe,powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
+  $helper='!' + '"' + $powershellExe + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/credential-helper.ps1'
   $helperArgs=@('-c','credential.helper=','-c',('credential.helper='+$helper),'-c','credential.interactive=never')
  }
  $psi=New-Object System.Diagnostics.ProcessStartInfo
  $psi.FileName=$script:GitExe
  $psi.WorkingDirectory=$Root
- $psi.Arguments=(($helperArgs+$GitArgs)|ForEach-Object{Quote-ProcessArg ([string]$_)}) -join ' '
+ $psi.Arguments=(($helperArgs+$effectiveGitArgs)|ForEach-Object{Quote-ProcessArg ([string]$_)}) -join ' '
  $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
  $psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
  $psi.EnvironmentVariables['GIT_TERMINAL_PROMPT']='0'
@@ -62,7 +65,8 @@ function Sync-Once{
   if($name.Code -ne 0 -or [string]::IsNullOrWhiteSpace($name.Text)){[void](Invoke-Git @('config','user.name','AutoUpdate Sync'))}
   $email=Invoke-Git @('config','user.email')
   if($email.Code -ne 0 -or [string]::IsNullOrWhiteSpace($email.Text)){[void](Invoke-Git @('config','user.email','autoupdate-sync@users.noreply.github.com'))}
-  $stage=Invoke-Git @('add','--','README.md','.gitignore','source','contracts','packages','channels','tools','tests')
+  $stagePaths=@('README.md','.gitignore','.github/workflows','source','contracts','packages','channels','tools','tests')|Where-Object{Test-Path -LiteralPath (Join-Path $Root $_)}
+  $stage=Invoke-Git (@('add','--')+$stagePaths)
   if($stage.Code -ne 0){Write-Log ('STOP stage failed: '+$stage.Text);return 23}
   $staged=Invoke-Git @('diff','--cached','--quiet')
   if($staged.Code -eq 1){

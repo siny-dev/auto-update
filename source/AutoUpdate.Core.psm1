@@ -80,6 +80,7 @@ public static class AutoUpdateCoreCredentialReader {
  [DllImport("Advapi32.dll",EntryPoint="CredReadW",CharSet=CharSet.Unicode,SetLastError=true)] public static extern bool CredRead(string target,UInt32 type,UInt32 flags,out IntPtr credential);
  [DllImport("Advapi32.dll",EntryPoint="CredFree",SetLastError=false)] public static extern void CredFree(IntPtr buffer);
 }
+
 "@
         Add-Type -TypeDefinition $source -ErrorAction Stop | Out-Null
     }
@@ -92,6 +93,53 @@ public static class AutoUpdateCoreCredentialReader {
         if ([string]::IsNullOrWhiteSpace($token) -or $token -match '\s') { throw 'Stored GitHub credential is empty or malformed.' }
         return $token
     } finally { [AutoUpdateCoreCredentialReader]::CredFree($pointer) }
+}
+
+function Get-AuRegisteredApps {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot)
+    $registryPath=Get-AuContainedPath $StateRoot 'registry/apps.json'
+    if(-not (Test-Path -LiteralPath $registryPath -PathType Leaf)){return @()}
+    $registry=Get-Content -Raw -LiteralPath $registryPath|ConvertFrom-Json
+    if($registry.schema -ne 1 -or $registry.apps -isnot [System.Array]){throw 'Application registry is invalid.'}
+    $seen=@{}
+    foreach($app in $registry.apps){
+        if($app.app_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $app.owner -notmatch '^[A-Za-z0-9-]+$' -or $app.repository -notmatch '^[A-Za-z0-9._-]+$' -or $app.architecture -notin @('any','x86','x64','arm64')){throw 'Application registry contains an invalid entry.'}
+        if($seen.ContainsKey(([string]$app.app_id).ToLowerInvariant())){throw 'Application registry contains duplicate app IDs.'}
+        $seen[([string]$app.app_id).ToLowerInvariant()]=$true
+    }
+    return @($registry.apps|Sort-Object app_id)
+}
+
+function Register-AuApplication {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$StateRoot,
+        [Parameter(Mandatory=$true)][string]$AppId,
+        [Parameter(Mandatory=$true)][string]$Owner,
+        [Parameter(Mandatory=$true)][string]$Repository,
+        [ValidateSet('any','x86','x64','arm64')][string]$Architecture='x64'
+    )
+    if($AppId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $Owner -notmatch '^[A-Za-z0-9-]+$' -or $Repository -notmatch '^[A-Za-z0-9._-]+$'){throw 'Invalid application registration.'}
+    $registryPath=Get-AuContainedPath $StateRoot 'registry/apps.json'
+    $registryRoot=Split-Path -Parent $registryPath
+    [void][IO.Directory]::CreateDirectory($registryRoot)
+    $mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateRegistry');$owned=$false
+    try{
+        try{$owned=$mutex.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$owned=$true}
+        if(-not $owned){throw 'Application registry is busy.'}
+        $apps=@(Get-AuRegisteredApps -StateRoot $StateRoot|Where-Object{$_.app_id -ine $AppId})
+        $apps+= [pscustomobject]@{app_id=$AppId;owner=$Owner;repository=$Repository;architecture=$Architecture;registered_utc=[DateTime]::UtcNow.ToString('o')}
+        $document=[ordered]@{schema=1;apps=@($apps|Sort-Object app_id)}
+        $tmp=$registryPath+'.'+[guid]::NewGuid().ToString('N')+'.part'
+        [IO.File]::WriteAllText($tmp,($document|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+        if([IO.File]::Exists($registryPath)){
+            $backup=$registryPath+'.bak'
+            [IO.File]::Replace($tmp,$registryPath,$backup,$true)
+            if([IO.File]::Exists($backup)){[IO.File]::Delete($backup)}
+        }else{[IO.File]::Move($tmp,$registryPath)}
+        return [pscustomobject]@{Status='registered';AppId=$AppId;Owner=$Owner;Repository=$Repository;Architecture=$Architecture;Registry=$registryPath}
+    }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
 
 function Invoke-AuGitHubGet {
@@ -275,4 +323,4 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Get-AuCurrent,Get-AuFileSha256
+Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication

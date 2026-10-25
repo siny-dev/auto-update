@@ -37,7 +37,7 @@ try{
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('local-ahead push failed exit='+$syncCode)
  Invoke-TestGit -At $testRoot -GitArguments @('clone',$bare,$other)|Out-Null
  Invoke-TestGit -At $other -GitArguments @('config','user.name','AutoUpdate Test')|Out-Null;Invoke-TestGit -At $other -GitArguments @('config','user.email','autoupdate-test@example.invalid')|Out-Null
- Check ([IO.File]::Exists((Join-Path $other 'source/local.txt'))) 'local change did not reach remote'
+ Check ([IO.File]::Exists((Join-Path $other 'source/local.txt'))) ('local change did not reach remote; sync log: '+[IO.File]::ReadAllText((Join-Path $local 'logs/sync.log')))
  [IO.File]::WriteAllText((Join-Path $other 'source/remote.txt'),'remote')
  Invoke-TestGit -At $other -GitArguments @('add','--all')|Out-Null;Invoke-TestGit -At $other -GitArguments @('commit','-m','remote change')|Out-Null;Invoke-TestGit -At $other -GitArguments @('push','origin','main')|Out-Null
  . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote

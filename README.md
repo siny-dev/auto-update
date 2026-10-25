@@ -12,6 +12,10 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
 - `tools/autoupdate.ps1`: 설치·상태 조회 명령줄 진입점. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
+- `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 최신 GitHub 릴리스를 10분마다 확인하는 공용 작업자.
+- `tools/register-app.ps1`: 프로그램을 공용 업데이트 목록에 한 번 등록하는 연결 명령.
+- `tools/install-update-task.ps1`: 사용자 로그인 후 공용 업데이트 작업자를 숨김 백그라운드에서 실행하도록 등록한다.
+- `tools/install-background.ps1`: 예약 작업 등록이 제한된 PC에서도 사용자 로그인 시작 폴더에 숨김 실행 바로가기를 설치한다.
 - `state/`, `logs/`: PC별 상태와 로그. 저장소에 올리지 않는다.
 
 패키지는 앱 ID·버전·플랫폼·아키텍처·최소 엔진 버전·호환 계약과 모든 파일의 경로·종류·크기·SHA-256을 선언한다. 엔진은 각 파일을 staging에서 검증한 다음 불변 버전 폴더에 넣고 `current.json`을 원자적으로 바꾼다. 검증이나 전환이 실패하면 현재 포인터와 이전 정상 버전을 보존한다. 구버전으로의 자동 다운그레이드는 거절한다. 사용자 설정·자격증명·캐시·작업 데이터는 패키지 디렉터리 바깥에 둔다.
@@ -22,11 +26,14 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 각 앱은 한 번만 얇은 연결부를 추가해 공용 엔진의 버전 포인터를 읽고 앱별 훅을 제공한다. 이후 공용 엔진 업데이트는 연결된 앱들이 정해진 안전 경계에서 새 엔진 버전을 로드하게 한다. 이미 엔진이 각 실행 파일에 복사되어 있는 앱은 연결부 전환과 호환 검증을 한 번 거쳐야 한다. 연결되지 않은 앱에 공용 엔진 수정이 저절로 도달한다고 간주하지 않는다.
 
+등록은 `tools/register-app.ps1 -AppId <고유 ID> -Owner <GitHub 소유자> -Repository <저장소> -Architecture <any|x86|x64|arm64>`로 한 번 수행한다. 등록부는 PC의 AutoUpdate 상태 폴더에 저장되며 Git 저장소에 커밋되지 않는다. `tools/install-update-task.ps1`은 기본 10분 주기의 백그라운드 작업을 설치한다. 작업자는 등록된 앱별 최신 릴리스를 설치하고 `state/logs/app-updates.jsonl`에 결과를 남긴다. 새 앱은 패키지 규약과 앱 연결부까지 통합해야 실제 실행 중 앱에 live 패치 또는 상태 보존 재시작이 반영된다.
+
 프로덕션 배포는 설정된 비공개 GitHub 저장소의 release asset과 정상 HTTPS 검증을 사용한다. PAT는 `AutoUpdate/github` Windows 자격 증명 대상에서 읽어야 하며 명령행·설정·로그·패키지에 쓰지 않는다. 최소 저장소와 최소 권한만 허용한다. 로컬 `PackageRoot` 설치는 격리된 검증에만 사용한다. 소스 Git 동기화는 커밋 그래프를 기준으로 fast-forward만 적용하고, 분기 시 양쪽 이력을 보존한 채 멈춘다.
 
 ## 현재 구현 상태
 
 - 준비됨: 소스 저장소의 로컬/원격 동기화 작업자. 로컬 bare 저장소 시험에서 push, fast-forward pull, 분기 보존을 확인했다.
+- 구현됨: PC별 등록부, 앱 등록/upsert, 정렬된 목록 조회, 앱별 릴리스 확인 작업자, 로그인 시 시작하는 10분 백그라운드 작업 설치기.
 - 구현됨: 불변 버전 staging, 전체 파일 크기·SHA-256 확인, 경로 탈출 방지, 앱/아키텍처/최소 엔진 확인, 라이브 코드 거절, 원자 포인터와 이전 포인터 보존, 기본 다운그레이드 거절.
 - 통과: 오프라인 패키지 staging·해시·롤백 시험과 GitHub 비공개 릴리스 실다운로드·설치. 현재 v0.1.401이 이 PC의 상태 루트에 설치되어 있고 반복 업데이트 확인은 already-current를 반환한다.
 - 남음: 공용 런타임 변경이 모든 채택 앱에 자동 전파되는 경로와 주기 확인을 구현하고, 실제 앱의 UI 안전 시점 훅 및 Windows 재시작 helper를 통합·실기 검증한다. AutoUpdate v0.1.401은 이 PC에서 설치·반복 확인했지만, 아직 모든 앱에 자동 적용된 상태는 아니다. 앱별 업데이트 엔진을 매번 다시 패치하는 대신 공용 런타임을 한 번 연결하고, 이후에는 AutoUpdate 릴리스만으로 갱신되도록 만드는 것이 완료 기준이다.
@@ -35,8 +42,16 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 ## 사용 예
 
-`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 읽는다. 검증된 로컬 패키지를 설치하는 명령은 다음 형태다.
+`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 읽는다. 앱을 등록하는 명령은 다음 형태다.
+
+`tools/register-app.ps1 -AppId Alarm -Owner siny-dev -Repository alarm -Architecture x64`
+
+백그라운드 10분 확인 작업은 다음 명령으로 설치한다. 예약 작업 등록이 허용되면 예약 작업을 쓰고, 제한된 PC에서는 사용자 로그인 시작 폴더의 숨김 바로가기를 쓴다.
+
+`tools/install-background.ps1`
+
+검증된 로컬 패키지를 설치하는 명령은 다음 형태다.
 
 `tools/autoupdate.ps1 -Command install -PackageRoot <검증용 패키지 폴더> -StateRoot <앱 데이터 경로> -AppId <앱 ID> -Architecture x64`
 
-실제 앱은 CLI의 패키지 선택 결과를 자체 UI·작업 상태 계약과 연결해야 한다. 이 CLI만으로 모든 앱이 자동 연결되는 것은 아니다.
+현재 공유폴더에는 AutoUpdate 외의 앱 연결부가 아직 없다. 따라서 AutoUpdate 엔진과 등록/주기 확인 기반은 구현 중이며, 각 기존 앱의 1회 등록 및 UI/작업 상태 연결을 마쳐야 해당 앱까지 실제 자동 적용된다. 이 CLI만으로 미등록 앱이 자동 연결되는 것은 아니다.
