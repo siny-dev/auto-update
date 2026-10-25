@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('install','update','status','resolve','register')][string]$Command,
+    [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$AppId='AutoUpdate',
@@ -26,6 +26,11 @@ try {
     if ($Command -eq 'install') {
         if ([string]::IsNullOrWhiteSpace($PackageRoot)) { throw 'PackageRoot is required for install.' }
         $result = Install-AuPackage -PackageRoot $PackageRoot -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
+    } elseif ($Command -eq 'install-local') {
+        if ([string]::IsNullOrWhiteSpace($PackageRoot)) { throw 'PackageRoot is required for install-local.' }
+        $localPackage = Get-AuLatestLocalPackage -PackageRoot $PackageRoot -AppId $AppId -Architecture $Architecture
+        if (-not $localPackage) { $result = [pscustomobject]@{Status='not-found';AppId=$AppId;Version=$null;Path=$null;Mode=$null;Message='No valid local package is available.'} }
+        else { $result = Install-AuPackage -PackageRoot $localPackage.Path -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture }
     } elseif ($Command -eq 'update') {
         if([string]::IsNullOrWhiteSpace($Owner)){$Owner='siny-dev'};if([string]::IsNullOrWhiteSpace($Repository)){$Repository='auto-update'}
         $result = Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture
