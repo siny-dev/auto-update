@@ -44,7 +44,9 @@ function Invoke-UpdateCycle{
         if(-not @($registered|Where-Object{$_.app_id -ceq 'AutoUpdate'}).Count){
             Register-AuApplication -StateRoot $StateRoot -AppId 'AutoUpdate' -Owner $Owner -Repository $Repository -Architecture 'any'|Out-Null
         }
-        foreach($app in (Get-AuRegisteredApps -StateRoot $StateRoot)){
+        $apps=@(Get-AuRegisteredApps -StateRoot $StateRoot)
+        $orderedApps=@($apps|Where-Object{$_.app_id -ceq 'AutoUpdate'})+@($apps|Where-Object{$_.app_id -cne 'AutoUpdate'})
+        foreach($app in $orderedApps){
             $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
             $buildRecipe=Join-Path $localPackageRoot 'build.json'
             if(Test-Path -LiteralPath $buildRecipe -PathType Leaf){
