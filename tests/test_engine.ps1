@@ -19,8 +19,12 @@ try {
     [void][IO.Directory]::CreateDirectory($testRoot)
     $state=Join-Path $testRoot 'state'
     $p1=New-TestPackage '1.0.0' 'v1'
+    $m=Get-Content -Raw -LiteralPath (Join-Path $p1 'manifest.json')|ConvertFrom-Json
+    [void]$m.PSObject.Properties.Remove('mode')
+    [IO.File]::WriteAllText((Join-Path $p1 'manifest.json'),($m|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
     $r1=Install-AuPackage -PackageRoot $p1 -StateRoot $state -AppId demo -Architecture x64
     Assert ($r1.Status -eq 'staged') 'initial package was not installed'
+    Assert ($r1.Mode -eq 'live') 'resource manifest without a mode must default to live'
     Assert ((Get-AuCurrent -StateRoot $state -AppId demo).Version -eq '1.0.0') 'initial current pointer is wrong'
 
     $p2=New-TestPackage '1.0.1' 'v2'
@@ -49,10 +53,17 @@ try {
     $failed=$false;try{Install-AuPackage -PackageRoot $p5 -StateRoot $state -AppId demo -Architecture x64|Out-Null}catch{$failed=$true}
     Assert $failed 'live executable was accepted'
 
-    $p6=New-TestPackage '1.0.2' 'path' 'restart' 'executable' '../escape.exe'
-    $failed=$false;try{Install-AuPackage -PackageRoot $p6 -StateRoot $state -AppId demo -Architecture x64|Out-Null}catch{$failed=$true}
+    $p6=New-TestPackage '1.0.2' 'runtime' 'restart' 'runtime' 'app.dll'
+    $m=Get-Content -Raw -LiteralPath (Join-Path $p6 'manifest.json')|ConvertFrom-Json
+    [void]$m.PSObject.Properties.Remove('mode')
+    [IO.File]::WriteAllText((Join-Path $p6 'manifest.json'),($m|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+    $r6=Install-AuPackage -PackageRoot $p6 -StateRoot $state -AppId demo -Architecture x64
+    Assert ($r6.Mode -eq 'restart') 'runtime manifest without a mode must default to restart'
+
+    $p7=New-TestPackage '1.0.3' 'path' 'restart' 'executable' '../escape.exe'
+    $failed=$false;try{Install-AuPackage -PackageRoot $p7 -StateRoot $state -AppId demo -Architecture x64|Out-Null}catch{$failed=$true}
     Assert $failed 'path traversal was accepted'
-    'PASS: immutable staging, hash checks, atomic pointer, previous-version retention, and rejection/rollback cases'
+    'PASS: missing-mode live/restart defaults, immutable staging, hash checks, atomic pointer, and rollback cases'
 } finally {
     $resolved=[IO.Path]::GetFullPath($testRoot)
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-engine-test-')){throw 'refusing unsafe test cleanup'}

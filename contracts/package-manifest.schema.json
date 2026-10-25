@@ -4,7 +4,7 @@
   "title": "AutoUpdate package manifest v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "contract", "app_id", "version", "mode", "platform", "architecture", "minimum_engine", "publisher_policy", "files"],
+  "required": ["schema", "contract", "app_id", "version", "platform", "architecture", "minimum_engine", "publisher_policy", "files"],
   "properties": {
     "schema": {"const": 1},
     "contract": {"const": "autoupdate-app-v1"},

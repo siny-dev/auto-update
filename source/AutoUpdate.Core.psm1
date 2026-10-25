@@ -23,7 +23,13 @@ function Test-AuManifest {
     if ($Manifest.schema -ne 1 -or $Manifest.contract -ne 'autoupdate-app-v1') { throw 'Unsupported manifest schema or contract.' }
     if ($Manifest.app_id -cne $ExpectedAppId -or $ExpectedAppId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Application identity mismatch.' }
     if ($Manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid package version.' }
-    if ($Manifest.mode -notin @('live','restart')) { throw 'Invalid update mode.' }
+    $modeProperty=$Manifest.PSObject.Properties['mode']
+    $effectiveMode=if($modeProperty){[string]$modeProperty.Value}else{''}
+    if([string]::IsNullOrWhiteSpace($effectiveMode)){
+        if(@($Manifest.files|Where-Object{$_.kind -in @('executable','runtime')}).Count -gt 0){$effectiveMode='restart'}else{$effectiveMode='live'}
+        $Manifest|Add-Member -NotePropertyName mode -NotePropertyValue $effectiveMode -Force
+    }
+    if ($effectiveMode -notin @('live','restart')) { throw 'Invalid update mode.' }
     if ($Manifest.platform -ne 'windows' -or $Manifest.architecture -notin @('any','x86','x64','arm64')) { throw 'Unsupported platform or architecture.' }
     if ($Manifest.minimum_engine -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid minimum engine version.' }
     if (-not (Test-AuVersionAtLeast $script:AutoUpdateEngineVersion ([string]$Manifest.minimum_engine))) { throw 'This package requires a newer AutoUpdate engine.' }
