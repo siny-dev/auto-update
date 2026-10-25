@@ -4,10 +4,12 @@ on:
     branches: [main]
     paths:
       - 'source/AutoUpdate.Core.psm1'
+      - 'tools/autoupdate.ps1'
+      - 'tools/restart-apply.ps1'
+      - 'tools/build-engine-release.ps1'
       - 'contracts/**'
       - 'tools/new-release-package.ps1'
       - 'VERSION'
-      - '.github/workflows/publish-engine.yml'
   workflow_dispatch:
 permissions:
   contents: write
@@ -19,13 +21,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify engine and package behavior
+      - name: Run complete AutoUpdate regression suite
         shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          .\tests\test_engine.ps1
-          .\tests\test_packager.ps1
-          .\tests\test_sync.ps1
+        run: .\tools\test-all.ps1
       - name: Build immutable release assets
         shell: powershell
         run: |
@@ -34,14 +32,8 @@ jobs:
           $attempt = [int]$env:GITHUB_RUN_ATTEMPT
           $version = '0.1.' + ($run * 100 + $attempt)
           $root = Join-Path $env:RUNNER_TEMP 'autoupdate-engine-release'
-          $payload = Join-Path $root 'payload'
           $output = Join-Path $root 'output'
-          New-Item -ItemType Directory -Force -Path (Join-Path $payload 'source') | Out-Null
-          Copy-Item .\source\AutoUpdate.Core.psm1 (Join-Path $payload 'source\AutoUpdate.Core.psm1')
-          $spec = @{ app_id='AutoUpdate'; version=$version; mode='restart'; platform='windows'; architecture='any'; minimum_engine='0.1.0'; files=@(@{path='source/AutoUpdate.Core.psm1'; kind='runtime'}) }
-          $specPath = Join-Path $root 'spec.json'
-          $spec | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $specPath
-          .\tools\new-release-package.ps1 -SpecPath $specPath -PayloadRoot $payload -OutputRoot $output
+          .\tools\build-engine-release.ps1 -Version $version -OutputRoot $output
           "ENGINE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ENGINE_RELEASE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Publish stable engine release

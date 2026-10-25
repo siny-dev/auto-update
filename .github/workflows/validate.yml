@@ -10,19 +10,21 @@ permissions:
   contents: read
 
 jobs:
-  sync-tests:
+  regression-tests:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Validate PowerShell scripts
         shell: powershell
         run: |
-          $files = @("tools/sync.ps1", "tools/credential-helper.ps1", "tests/test_sync.ps1")
+          $files = @(Get-ChildItem -Path tools,tests -Recurse -File -Include *.ps1,*.psm1)
+          $failed = $false
           foreach ($file in $files) {
             $tokens = $null; $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error ($file.FullName + ': ' + $_.Message) }; $failed = $true }
           }
-      - name: Exercise local push, fast-forward pull, and conflict preservation
+          if ($failed) { exit 1 }
+      - name: Run complete AutoUpdate regression suite
         shell: powershell
-        run: .\tests\test_sync.ps1
+        run: .\tools\test-all.ps1

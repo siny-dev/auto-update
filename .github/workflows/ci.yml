@@ -12,10 +12,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test package staging, rollback, and release packaging
+      - name: Run complete AutoUpdate regression suite
         shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          .\tests\test_engine.ps1
-          .\tests\test_packager.ps1
-          .\tests\test_sync.ps1
+        run: .\tools\test-all.ps1
