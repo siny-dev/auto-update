@@ -44,7 +44,7 @@ $oldPath=Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source\AutoUpdate.Core
 $oldSha=(Get-FileHash -LiteralPath $oldPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\manifest.json'),(@{files=@(@{kind='runtime';path='source/AutoUpdate.Core.psm1';sha256=$oldSha})}|ConvertTo-Json -Depth 6))
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\current.json'),('{"schema":1,"app_id":"AutoUpdate","version":"0.1.1"}'))
-$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE
+$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER
 try{
     $env:AU_WORKER_TEST_STATE=$state;$env:AU_WORKER_TEST_TRACE=$trace;$env:AU_WORKER_TEST_NEW_MODULE=$newModulePath
     $shell=Join-Path $PSHOME 'pwsh.exe'
@@ -57,9 +57,34 @@ try{
     if($rows -notcontains 'new:TEST-APP'){throw 'The remaining app was not processed with the newly installed engine in the same cycle.'}
     if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
     Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
+
+    $handoffRoot=Join-Path $temp 'handoff';$handoffTools=Join-Path $handoffRoot 'tools';[void][IO.Directory]::CreateDirectory($handoffTools)
+    $handoffWorker=Join-Path $handoffTools 'update-registered-apps.ps1';$marker=Join-Path $temp 'runner-restart-requested.txt'
+    $handoffSource=$workerSource.Replace('Start-Sleep -Seconds ($IntervalMinutes*60)','Start-Sleep -Milliseconds 500')
+    $startLine='        Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null'
+    $handoffSource=$handoffSource.Replace($startLine,'        [IO.File]::WriteAllText($env:AU_WORKER_TEST_RESTART_MARKER,''requested'')')
+    if($handoffSource -ceq $workerSource -or $handoffSource.Contains($startLine)){throw 'Could not isolate the shared-worker restart handoff for testing.'}
+    [IO.File]::WriteAllText($handoffWorker,$handoffSource,[Text.UTF8Encoding]::new($false))
+    $env:AU_WORKER_TEST_RESTART_MARKER=$marker
+    $beforeCount=@(Get-Content -LiteralPath $trace).Count
+    $workerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$handoffWorker,'-IntervalMinutes','1','-StateRoot',$state,'-Owner','sample','-Repository','engine')
+    $workerProcess=Start-Process -FilePath $shell -ArgumentList $workerArgs -WindowStyle Hidden -PassThru
+    try{
+        $deadline=[DateTime]::UtcNow.AddSeconds(8)
+        while([DateTime]::UtcNow -lt $deadline -and @(Get-Content -LiteralPath $trace).Count -le $beforeCount){Start-Sleep -Milliseconds 100}
+        if(@(Get-Content -LiteralPath $trace).Count -le $beforeCount){throw 'Long-running worker did not complete its initial cycle.'}
+        [IO.File]::AppendAllText($handoffWorker,"`n# simulated shared-folder update`n")
+        $deadline=[DateTime]::UtcNow.AddSeconds(8)
+        while([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $marker)){Start-Sleep -Milliseconds 100}
+        if(-not (Test-Path -LiteralPath $marker)){throw 'Long-running worker did not request a handoff after its script changed.'}
+        if(-not (Select-String -LiteralPath (Join-Path $state 'logs\app-updates.jsonl') -SimpleMatch 'runner-restart-requested' -Quiet)){throw 'Long-running worker did not log its restart handoff.'}
+        if(-not $workerProcess.WaitForExit(5000)){throw 'Old worker stayed alive after handing off.'}
+        Write-Output 'PASS a running worker detects a changed shared script and hands off without a visible console.'
+    }finally{if(-not $workerProcess.HasExited){Stop-Process -Id $workerProcess.Id -Force -ErrorAction SilentlyContinue}}
 }finally{
     if($null -eq $previousState){Remove-Item Env:AU_WORKER_TEST_STATE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_STATE=$previousState}
     if($null -eq $previousTrace){Remove-Item Env:AU_WORKER_TEST_TRACE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_TRACE=$previousTrace}
     if($null -eq $previousModule){Remove-Item Env:AU_WORKER_TEST_NEW_MODULE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_NEW_MODULE=$previousModule}
+    if($null -eq $previousMarker){Remove-Item Env:AU_WORKER_TEST_RESTART_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_RESTART_MARKER=$previousMarker}
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
