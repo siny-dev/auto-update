@@ -11,7 +11,7 @@ $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Loca
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
 $script:EngineLabel='@@LABEL@@'
-function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'}) }
+function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='2-APP';owner='sample';repository='second-app';architecture='x64'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'}) }
 function Register-AuApplication { param($StateRoot,$AppId,$Owner,$Repository,$Architecture); [pscustomobject]@{Status='registered'} }
 function Get-AuLatestLocalPackage { param($PackageRoot,$AppId,$Architecture); $null }
 function Get-AuLatestReleaseManifest { param($Owner,$Repository,$AppId,$Architecture); $null }
@@ -55,7 +55,8 @@ try{
     $rows=@(Get-Content -LiteralPath $trace)
     if($rows -notcontains 'old:AutoUpdate'){throw 'The active engine did not process its own update.'}
     if($rows -notcontains 'new:TEST-APP'){throw 'The remaining app was not processed with the newly installed engine in the same cycle.'}
-    Write-Output 'PASS AutoUpdate hot reloads before the remaining registered apps are processed.'
+    if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
+    Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
 }finally{
     if($null -eq $previousState){Remove-Item Env:AU_WORKER_TEST_STATE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_STATE=$previousState}
     if($null -eq $previousTrace){Remove-Item Env:AU_WORKER_TEST_TRACE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_TRACE=$previousTrace}
