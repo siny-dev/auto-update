@@ -3,6 +3,8 @@ $GitExe=(Get-Command git.exe -ErrorAction Stop|Select-Object -First 1).Source
 $sourceRoot=Split-Path -Parent $PSScriptRoot
 $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot=Join-Path $tempRoot ('AutoUpdate-sync-test-'+[guid]::NewGuid().ToString('N'))
+$testMutexName='Local\AutoUpdateSourceSyncTest-'+[guid]::NewGuid().ToString('N')
+
 $bare=Join-Path $testRoot 'remote.git';$seed=Join-Path $testRoot 'seed';$local=Join-Path $testRoot 'local';$other=Join-Path $testRoot 'other'
 function Quote-TestArg([string]$Value){if($Value -notmatch '[\s"]'){return $Value};return '"' + $Value.Replace('"','\"') + '"'}
 function Invoke-TestGit { param([string]$At,[string[]]$GitArguments)
@@ -33,19 +35,19 @@ try{
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/sync.ps1') -Destination (Join-Path $local 'tools/sync.ps1')
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/credential-helper.ps1') -Destination (Join-Path $local 'tools/credential-helper.ps1')
  [IO.File]::WriteAllText((Join-Path $local 'source/local.txt'),'local')
- . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote
+ . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('local-ahead push failed exit='+$syncCode)
  Invoke-TestGit -At $testRoot -GitArguments @('clone',$bare,$other)|Out-Null
  Invoke-TestGit -At $other -GitArguments @('config','user.name','AutoUpdate Test')|Out-Null;Invoke-TestGit -At $other -GitArguments @('config','user.email','autoupdate-test@example.invalid')|Out-Null
  Check ([IO.File]::Exists((Join-Path $other 'source/local.txt'))) ('local change did not reach remote; sync log: '+[IO.File]::ReadAllText((Join-Path $local 'logs/sync.log')))
  [IO.File]::WriteAllText((Join-Path $other 'source/remote.txt'),'remote')
  Invoke-TestGit -At $other -GitArguments @('add','--all')|Out-Null;Invoke-TestGit -At $other -GitArguments @('commit','-m','remote change')|Out-Null;Invoke-TestGit -At $other -GitArguments @('push','origin','main')|Out-Null
- . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote
+ . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('remote-ahead fast-forward failed exit='+$syncCode)
  [IO.File]::WriteAllText((Join-Path $local 'source/local-diverged.txt'),'local')
  [IO.File]::WriteAllText((Join-Path $other 'source/remote-diverged.txt'),'remote')
  Invoke-TestGit -At $other -GitArguments @('add','--all')|Out-Null;Invoke-TestGit -At $other -GitArguments @('commit','-m','remote divergent')|Out-Null;Invoke-TestGit -At $other -GitArguments @('push','origin','main')|Out-Null
- . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote
+ . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 Check ($global:AutoUpdateSyncLastExit -eq 34) 'divergence was not stopped'
  Check ([IO.File]::Exists((Join-Path $other 'source/remote-diverged.txt'))) 'remote divergent file was lost'
  $log=[IO.File]::ReadAllText((Join-Path $local 'logs/sync.log'))

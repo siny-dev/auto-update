@@ -1,4 +1,4 @@
-param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10)
+param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$MutexName='Local\AutoUpdateSourceSync')
 $ErrorActionPreference='Stop'
 $script:GitExe=(Get-Command git.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source
 if(-not $script:GitExe){$candidate='C:\Program Files\Git\cmd\git.exe';if(Test-Path -LiteralPath $candidate){$script:GitExe=$candidate}}
@@ -124,7 +124,7 @@ function Wait-ForSyncTrigger([int]$PollSeconds,[int]$DebounceSeconds){
  }while($true)
 }
 $dotSourced=($MyInvocation.InvocationName -eq '.')
-$mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateSourceSync');$owned=$false;$code=0;$retryMinutes=1;$watcher=$null;$subscriptions=@()
+$mutex=[Threading.Mutex]::new($false,$MutexName);$owned=$false;$code=0;$retryMinutes=1;$watcher=$null;$subscriptions=@()
 try{
  try{$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
  if(-not $owned){Write-Log 'SKIP another sync worker is active';$code=0}
