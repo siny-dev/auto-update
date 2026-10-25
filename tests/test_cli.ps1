@@ -8,10 +8,25 @@ Assert (Test-AuReleaseTagVersion -Tag 'V1.0.010' -Version '1.0.10') 'Zero-padded
 Assert (Test-AuReleaseTagVersion -Tag 'v0.1.1304' -Version '0.1.1304') 'Standard AutoUpdate release tag was rejected'
 Assert (-not (Test-AuReleaseTagVersion -Tag 'V1.0.011' -Version '1.0.10')) 'Mismatched release tag was accepted'
 Assert (-not (Test-AuReleaseTagVersion -Tag 'release-1.0.10' -Version '1.0.10')) 'Non-semantic release tag was accepted'
+function Quote-ProcessArgument([string]$Value){'"'+$Value.Replace('"','\"')+'"'}
+function Invoke-PowerShellProcess([string]$Executable,[string[]]$Arguments){
+    $start=New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName=$Executable
+    $start.Arguments=(($Arguments|ForEach-Object{Quote-ProcessArgument ([string]$_)}) -join ' ')
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true
+    $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $process=New-Object System.Diagnostics.Process;$process.StartInfo=$start
+    if(-not $process.Start()){throw 'Could not start the PowerShell test process.'}
+    $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync()
+    $process.WaitForExit();$exitCode=$process.ExitCode
+    $stdout=$stdoutTask.Result;$stderr=$stderrTask.Result;$process.Dispose()
+    return [pscustomobject]@{ExitCode=$exitCode;StdOut=$stdout;StdErr=$stderr}
+}
 function Invoke-Cli([string]$App,[string]$Architecture='x64'){
     $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
-    $output=& $exe -NoLogo -NoProfile -NonInteractive -File $cli -Command resolve -StateRoot (Join-Path $root 'state') -AppId $App -Architecture $Architecture 2>$null
-    return [pscustomobject]@{ExitCode=$LASTEXITCODE;Result=($output|ConvertFrom-Json)}
+    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','resolve','-StateRoot',(Join-Path $root 'state'),'-AppId',$App,'-Architecture',$Architecture)
+    $run=Invoke-PowerShellProcess $exe $arguments
+    return [pscustomobject]@{ExitCode=$run.ExitCode;Result=($run.StdOut|ConvertFrom-Json);Error=$run.StdErr}
 }
 try{
     [void][IO.Directory]::CreateDirectory((Join-Path $root 'payload'))
@@ -21,11 +36,12 @@ try{
     $manifest=[ordered]@{schema=1;contract='autoupdate-app-v1';app_id='cli-demo';version='1.0.0';mode='live';platform='windows';architecture='x86';minimum_engine='0.1.0';publisher_policy='github-release-asset-https';files=@(@{path='app.json';kind='resource';size=$size;sha256=$hash;source='payload/app.json';asset='app_json'})}
     [IO.File]::WriteAllText((Join-Path $package 'manifest.json'),($manifest|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
     $missing=Invoke-Cli 'cli-demo';Assert ($missing.ExitCode -eq 2 -and $missing.Result.status -eq 'not-installed') 'resolve did not report a missing package distinctly'
-    $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
     $state=Join-Path $root 'state'
-    $registeredOutput=& $exe -NoLogo -NoProfile -NonInteractive -File $cli -Command register -StateRoot $state -AppId 'cli-demo' -Owner 'example-owner' -Repository 'example-repo' -Architecture x64 2>$null
-    $registered=$registeredOutput|ConvertFrom-Json
-    Assert ($LASTEXITCODE -eq 0 -and $registered.Status -eq 'registered') 'CLI registration did not report success'
+    $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
+    $registerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','register','-StateRoot',$state,'-AppId','cli-demo','-Owner','example-owner','-Repository','example-repo','-Architecture','x64')
+    $registeredRun=Invoke-PowerShellProcess $exe $registerArgs
+    $registered=$registeredRun.StdOut|ConvertFrom-Json
+    Assert ($registeredRun.ExitCode -eq 0 -and $registered.Status -eq 'registered') 'CLI registration did not report success'
     $registry=Get-AuRegisteredApps -StateRoot $state
     Assert (@($registry|Where-Object{$_.app_id -eq 'cli-demo' -and $_.owner -eq 'example-owner' -and $_.repository -eq 'example-repo'}).Count -eq 1) 'CLI registration was not persisted'
     Install-AuPackage -PackageRoot $package -StateRoot (Join-Path $root 'state') -AppId 'cli-demo' -Architecture 'x86'|Out-Null
