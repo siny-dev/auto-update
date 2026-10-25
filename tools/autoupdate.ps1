@@ -1,0 +1,41 @@
+param(
+    [Parameter(Mandatory=$true)][ValidateSet('install','update','status')][string]$Command,
+    [string]$PackageRoot,
+    [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
+    [string]$AppId='AutoUpdate',
+    [ValidateSet('x86','x64','arm64')][string]$Architecture='x64',
+    [string]$Owner,
+    [string]$Repository
+)
+$ErrorActionPreference='Stop'
+$sourceModule=Join-Path $PSScriptRoot '..\source\AutoUpdate.Core.psm1'
+$enginePointerPath=Join-Path $StateRoot 'apps\AutoUpdate\current.json'
+if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
+    $enginePointer=Get-Content -Raw -LiteralPath $enginePointerPath|ConvertFrom-Json
+    if($enginePointer.schema -ne 1 -or $enginePointer.app_id -cne 'AutoUpdate' -or $enginePointer.version -notmatch '^\d+\.\d+\.\d+$'){throw 'Installed AutoUpdate pointer is invalid.'}
+    $installedRoot=Join-Path $StateRoot ('apps\AutoUpdate\versions\'+$enginePointer.version)
+    $engineManifest=Get-Content -Raw -LiteralPath (Join-Path $installedRoot 'manifest.json')|ConvertFrom-Json
+    $engineEntry=@($engineManifest.files|Where-Object{$_.kind -eq 'runtime' -and $_.path -ceq 'source/AutoUpdate.Core.psm1'})
+    if($engineEntry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
+    $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
+    if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
+    $sourceModule=$candidate
+}
+Import-Module $sourceModule -Force
+try {
+    if ($Command -eq 'install') {
+        if ([string]::IsNullOrWhiteSpace($PackageRoot)) { throw 'PackageRoot is required for install.' }
+        $result = Install-AuPackage -PackageRoot $PackageRoot -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
+    } elseif ($Command -eq 'update') {
+        if([string]::IsNullOrWhiteSpace($Owner)){$Owner='siny-dev'};if([string]::IsNullOrWhiteSpace($Repository)){$Repository='auto-update'}
+        $result = Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture
+    } else {
+        $result = Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+        if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
+    }
+    $result | ConvertTo-Json -Depth 8 -Compress
+    exit 0
+} catch {
+    [Console]::Error.WriteLine(($_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'))
+    exit 1
+}

@@ -1,0 +1,55 @@
+name: Publish shared AutoUpdate engine
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'source/AutoUpdate.Core.psm1'
+      - 'contracts/**'
+      - 'tools/new-release-package.ps1'
+      - 'VERSION'
+      - '.github/workflows/publish-engine.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: autoupdate-engine-release
+  cancel-in-progress: false
+jobs:
+  package-and-publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify engine and package behavior
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\test_engine.ps1
+          .\tests\test_packager.ps1
+          .\tests\test_sync.ps1
+      - name: Build immutable release assets
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $run = [int]$env:GITHUB_RUN_NUMBER
+          $attempt = [int]$env:GITHUB_RUN_ATTEMPT
+          $version = '0.1.' + ($run * 100 + $attempt)
+          $root = Join-Path $env:RUNNER_TEMP 'autoupdate-engine-release'
+          $payload = Join-Path $root 'payload'
+          $output = Join-Path $root 'output'
+          New-Item -ItemType Directory -Force -Path (Join-Path $payload 'source') | Out-Null
+          Copy-Item .\source\AutoUpdate.Core.psm1 (Join-Path $payload 'source\AutoUpdate.Core.psm1')
+          $spec = @{ app_id='AutoUpdate'; version=$version; mode='restart'; platform='windows'; architecture='any'; minimum_engine='0.1.0'; files=@(@{path='source/AutoUpdate.Core.psm1'; kind='runtime'}) }
+          $specPath = Join-Path $root 'spec.json'
+          $spec | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $specPath
+          .\tools\new-release-package.ps1 -SpecPath $specPath -PayloadRoot $payload -OutputRoot $output
+          "ENGINE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ENGINE_RELEASE_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Publish stable engine release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v' + $env:ENGINE_VERSION
+          $files = @((Join-Path $env:ENGINE_RELEASE_OUTPUT 'autoupdate-manifest.json')) + @(Get-ChildItem (Join-Path $env:ENGINE_RELEASE_OUTPUT 'assets') -File | ForEach-Object FullName)
+          gh release create $tag $files --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AutoUpdate engine $env:ENGINE_VERSION" --notes 'Verified shared updater runtime package.'
