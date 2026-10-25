@@ -33,7 +33,7 @@ try {
         if([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($Repository)){throw 'Owner and Repository are required for registration.'}
         $result = Register-AuApplication -StateRoot $StateRoot -AppId $AppId -Owner $Owner -Repository $Repository -Architecture $Architecture
     } else {
-        $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId
+        $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
         elseif($result.Manifest.architecture -ne 'any' -and $result.Manifest.architecture -ne $Architecture){throw 'Active package architecture does not match this application.'}
         elseif($Command -eq 'resolve') { $result=[pscustomobject]@{schema=1;status='ready';app_id=$result.AppId;version=$result.Version;mode=$result.Mode;package_path=$result.Path;verified=$true;manifest=$result.Manifest} }
