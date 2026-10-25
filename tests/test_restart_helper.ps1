@@ -7,6 +7,21 @@ Import-Module $module -Force
 $root=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdateRestartTest-'+[guid]::NewGuid().ToString('N'))
 $systemPowerShell=(Get-Command powershell.exe -ErrorAction Stop).Source
 $oldExe=Join-Path $env:WINDIR 'System32\where.exe'
+function Wait-ForFileUnlocked([string]$Path,[int]$TimeoutSeconds=10){
+    $timer=[Diagnostics.Stopwatch]::StartNew()
+    do{
+        $stream=$null
+        try{
+            $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+            return
+        }catch [IO.IOException]{
+            Start-Sleep -Milliseconds 100
+        }finally{
+            if($stream){$stream.Dispose()}
+        }
+    }while($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+    throw 'The previous test executable did not release its file handle.'
+}
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
 function New-Package([string]$Version){
     $package=Join-Path $root ('package-'+$Version);$payload=Join-Path $package 'payload';[void][IO.Directory]::CreateDirectory($payload)
@@ -41,6 +56,7 @@ if(`$healthIndex -lt 0 -or `$versionIndex -lt 0){exit 10}
     $ok=Get-Content -Raw $success.stdout|ConvertFrom-Json;Assert ($ok.status -eq 'confirmed') ('restart helper did not confirm healthy process: '+(Get-Content -Raw $success.stdout)+' ERR '+(Get-Content -Raw $success.stderr))
     $packageExe=Join-Path $root 'state\apps\restart-demo\versions\1.0.0\demo.exe';Assert ((Get-AuFileSha256 $target) -eq (Get-AuFileSha256 $packageExe)) 'restart helper did not replace target with the verified executable'
     $package2=New-Package '1.0.1';Install-AuPackage -PackageRoot $package2 -StateRoot (Join-Path $root 'state') -AppId restart-demo -Architecture x64|Out-Null
+    Wait-ForFileUnlocked -Path $target
     [IO.File]::Copy($oldExe,$target,$true);$oldHash=Get-AuFileSha256 $target
     $rollback=Invoke-Helper (Join-Path $root 'state\apps\restart-demo\versions\1.0.1') $noAck $target -1
     $rolled=Get-Content -Raw $rollback.stdout|ConvertFrom-Json;Assert ($rolled.status -eq 'rolled-back') 'restart helper did not report rollback after missing health acknowledgement'
