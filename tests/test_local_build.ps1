@@ -18,6 +18,8 @@ try{
     Import-Module (Join-Path $PSScriptRoot '..\source\AutoUpdate.Core.psm1') -Force
     $latest=Get-AuLatestLocalPackage -PackageRoot $packageRoot -AppId demo-build -Architecture x64
     Assert ($latest.Manifest.version -eq '2.0.1') 'latest generated package is not visible to the updater candidate scanner'
+    Remove-Item -LiteralPath (Join-Path $packageRoot '.build-state.json') -Force
+    $migrated=Invoke-Build $null;Assert ($migrated.status -eq 'unchanged' -and $migrated.version -eq '2.0.1') 'existing matching package was rebuilt when build state was absent'
     Remove-Item -LiteralPath (Join-Path $packageRoot '2.0.1') -Recurse -Force
     $recovered=Invoke-Build '2.0.0';Assert ($recovered.status -eq 'built' -and $recovered.version -eq '2.0.2') 'missing last package was incorrectly treated as unchanged'
     'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, and rebuilds after package loss'
