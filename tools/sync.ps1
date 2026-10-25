@@ -9,6 +9,7 @@ if(-not (Get-Command git.exe -ErrorAction SilentlyContinue)){
  if($gitFound){$env:Path=(Split-Path -Parent $gitFound)+';'+$env:Path}
 }
 $Root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'read-update-policy.ps1')
 $Logs=Join-Path $Root 'logs'
 $LogFile=Join-Path $Logs 'sync.log'
 [void][IO.Directory]::CreateDirectory((Join-Path $Root 'state'))
@@ -65,7 +66,7 @@ function Sync-Once{
   if($name.Code -ne 0 -or [string]::IsNullOrWhiteSpace($name.Text)){[void](Invoke-Git @('config','user.name','AutoUpdate Sync'))}
   $email=Invoke-Git @('config','user.email')
   if($email.Code -ne 0 -or [string]::IsNullOrWhiteSpace($email.Text)){[void](Invoke-Git @('config','user.email','autoupdate-sync@users.noreply.github.com'))}
-  $stagePaths=@('README.md','.gitignore','.github/workflows','source','contracts','packages','channels','tools','tests')|Where-Object{Test-Path -LiteralPath (Join-Path $Root $_)}
+  $stagePaths=@('README.md','.gitignore','.github/workflows','source','contracts','packages','channels','config','tools','tests')|Where-Object{Test-Path -LiteralPath (Join-Path $Root $_)}
   $stage=Invoke-Git (@('add','--')+$stagePaths)
   if($stage.Code -ne 0){Write-Log ('STOP stage failed: '+$stage.Text);return 23}
   $staged=Invoke-Git @('diff','--cached','--quiet')
@@ -146,7 +147,7 @@ try{
    try{$code=Sync-Once}
    catch{Write-Log ('SYNC_RETRY unexpected error: '+$_.Exception.GetType().Name);if($Once){$code=35}}
    if($Once){break}
-   if($code -eq 0){$delayMinutes=[Math]::Max(1,$IntervalMinutes);$retryMinutes=1}
+   if($code -eq 0){$delayMinutes=Get-AuUpdatePolicyInterval -PolicyPath (Join-Path $Root 'config\update-policy.json') -FallbackMinutes $IntervalMinutes;$retryMinutes=1}
    else{$delayMinutes=$retryMinutes;$retryMinutes=[Math]::Min(30,$retryMinutes*2)}
    $delaySeconds=[Math]::Min(1800,$delayMinutes*60)
    if($code -ne 0){$jitter=[Math]::Max(1,[int]($delaySeconds*0.15));$delaySeconds=[Math]::Max(1,[Math]::Min(1800,$delaySeconds+(Get-Random -Minimum (-$jitter) -Maximum ($jitter+1))))}

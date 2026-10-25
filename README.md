@@ -72,3 +72,8 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 `tools/autoupdate.ps1 -Command install -PackageRoot <검증용 패키지 폴더> -StateRoot <앱 데이터 경로> -AppId <앱 ID> -Architecture x64`
 
 `app-base` 템플릿에는 공용 연결부가 포함되어 있으며 앱은 실행 후 공용 상태 저장소에 자동 등록된다. 등록부는 PC별이므로 실제 전파 대상을 확인하려면 해당 PC의 `%LOCALAPPDATA%\Siny\AutoUpdate\registry\apps.json`과 `logs\app-updates.jsonl`을 확인한다. 기존 자체 업데이터 앱은 한 번 공용 연결부를 적용해야 하며, 미등록 앱은 자동으로 업데이트되지 않는다.
+
+
+## 공용 확인 주기
+
+config/update-policy.json이 연결된 앱의 공용 확인 주기입니다. 시험 중 interval_minutes를 5로 두고, 검증 완료 후 10으로 바꿉니다. 등록 앱 작업자와 소스 동기화 작업자는 매 주기 이 설정을 다시 읽습니다. 연결된 앱의 화면 내 확인 타이머도 이 파일을 읽어 같은 주기를 적용합니다. 설정이 없거나 잘못되면 안전한 기본값 10분을 사용합니다.

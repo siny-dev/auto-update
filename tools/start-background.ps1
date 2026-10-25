@@ -1,6 +1,8 @@
 param([ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'))
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'read-update-policy.ps1')
+$IntervalMinutes=Get-AuUpdatePolicyInterval -PolicyPath (Join-Path $root 'config\update-policy.json') -FallbackMinutes $IntervalMinutes
 $exe=Join-Path $PSHOME 'pwsh.exe'
 if(-not (Test-Path -LiteralPath $exe)){$exe=Join-Path $PSHOME 'powershell.exe'}
 if(-not (Test-Path -LiteralPath $exe)){$exe=(Get-Command pwsh.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source}
