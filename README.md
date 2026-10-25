@@ -18,7 +18,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `contracts/`: 앱 연결부와 패키지 규약.
 - `packages/`: 승인된 엔진·앱 패키지의 개발 산출물.
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
-- `tools/autoupdate.ps1`: 설치·상태 조회 및 앱 연결용 JSON resolve 명령줄 진입점. `tools/restart-apply.ps1`은 예외 재시작 때 저장된 상태를 전달하고 실행 파일을 교체한 뒤, 새 앱의 복원 확인 전이면 이전 실행본으로 롤백한다. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. AutoUpdate 자체 v0.1.1302는 세 공용 런타임 파일로 자동 게시·설치됐고, 설치본 도우미의 성공·롤백 시험을 통과했다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
+- `tools/autoupdate.ps1`: 설치·상태 조회·앱 등록 및 앱 연결용 JSON resolve 명령줄 진입점. `tools/restart-apply.ps1`은 예외 재시작 때 저장된 상태를 전달하고 실행 파일을 교체한 뒤, 새 앱의 복원 확인 전이면 이전 실행본으로 롤백한다. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. AutoUpdate 자체 v0.1.1302는 세 공용 런타임 파일로 자동 게시·설치됐고, 설치본 도우미의 성공·롤백 시험을 통과했다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분마다 수행하는 공용 작업자.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 선언된 파일이 바뀌거나 원격보다 로컬 패키지 버전이 낮으면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
@@ -47,16 +47,16 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - 구현됨: PC별 앱 등록부, 등록된 앱의 최신 GitHub 릴리스 10분 확인/설치, 로그인 시 시작하는 숨김 백그라운드 실행. AutoUpdate 자체는 `siny-dev/auto-update`에 등록되어 있고 현재 v0.1.1302를 설치했다.
 - 구현됨: 불변 버전 staging, 전체 파일 크기·SHA-256 확인, 경로 탈출 방지, 앱/아키텍처/최소 엔진 확인, 라이브 코드 거절, 원자 포인터와 이전 포인터 보존, 기본 다운그레이드 거절. `Get-AuVerifiedCurrent`가 앱에 전달하기 직전 활성 포인터·manifest·모든 payload를 다시 검증한다.
 - 통과: 오프라인 패키지 staging·해시·롤백 시험과 GitHub 비공개 릴리스 실다운로드·설치·반복 확인. 현재 v0.1.1302가 이 PC의 상태 루트에 설치됐고, 10분 주기 업데이트 로그에 `staged`가 기록됐다. 설치된 엔진 모듈 SHA-256이 manifest와 일치하며, 새 `Get-AuVerifiedCurrent` 함수가 실제 설치 모듈에서 호출돼 상태 조회와 payload 전체 검증을 통과했다. Restart helper는 임시 앱 실행 파일로 정상 복원 확인 및 미확인 시 원본 실행 파일 롤백 시험을 통과했다.
-- 남음: 현재 등록된 앱은 AutoUpdate 자체뿐이다. 제작 기본툴 `app-base`는 기존 실행 파일용 schema 2 업데이트를 유지하면서, 다음 릴리스부터 공용 엔진이 읽는 schema 1 `manifest.json`도 함께 내보내도록 호환 패키징을 추가했다. 생성·해시·live/restart 분류 시험은 통과했지만, 이 변경은 아직 app-base 릴리스에 포함되지 않았고 실행 앱도 공용 설치 패키지를 읽지 않는다. 다음은 BASE-001의 얇은 런타임 연결부, 앱 등록, CI Windows 빌드/상태 복원 실기를 연결하는 일이다. 기존 앱마다 최초 연결은 필요하며, 이후 공용 엔진 수정이 연결 앱에 전달되는지 확인한다.
+- 진행: `app-base`는 기존 schema 2 호환을 유지하면서 schema 1 공용 manifest도 발행하고, 숨김 CLI로 자기 앱을 등록한 뒤 공용 엔진이 검증·설치한 패키지를 기존 live/restart 상태 보존 경로로 전달하도록 연결했다. 실제 Windows 32비트 컴파일과 live 적용·오류 거절·실제 재시작 복원·실행 실패 롤백·중단 교체 복구 통합시험이 통과했다. AutoUpdate CLI에 `register`도 추가하고 테스트했다. 남은 일은 새 app-base 버전의 CI/릴리스, 이 PC에서 등록·패키지 설치·앱 적용의 첫 실운전, 이후 기본툴을 템플릿으로 생성한 앱들의 최초 연결 절차다. 기존 앱에 연결부를 한 번 넣는 작업은 필요하며, 연결된 뒤 업데이트 선택·검증·전달은 공용 엔진이 맡는다.
 - 완료: 각 등록 앱이 `outbox/apps/<AppId>/<version>/` 로컬 패키지 후보와 GitHub stable 릴리스를 10분마다 비교한다. 높은 버전은 로컬 또는 GitHub에서 선택하고, 같은 버전에서 payload hash가 다르면 충돌로 보류한다. 로컬 최신 패키지 선택·실제 파일 크기/SHA-256 사전 검증·설치와 후보 판정 단위시험 통과. 손상된 높은 버전 후보는 건너뛰고 다음 유효 패키지를 선택한다. 같은 버전의 설치본에서 payload가 다르면 already-current로 오인하지 않고 충돌로 보류한다.
 - 로컬 검증 완료: `build.json` 레시피에서 자동 패키지를 만들고, 변경이 없으면 건너뛰며, 바뀌거나 원격이 더 높으면 로컬·GitHub 최신보다 높은 버전을 만든다. 로컬 패키지는 GitHub 초안 릴리스에 올린 뒤 manifest·asset 수·각 원격 파일의 크기와 SHA-256을 확인하고 공개한다. 원격 최신 패키지는 검증 후 공유 outbox에 원자 저장하고 설치한다. 버전 충돌은 보류하고 덮어쓰지 않는다. 자동 빌드·후보 선택·충돌·staging/rollback, 상태 파일 누락 시 기존 패키지 인식, 마지막 패키지 손실 후 재빌드 로컬시험 통과. CI/validation #24 통과. 실제 앱에는 아직 `build.json`이 없어 앱 릴리스 게시시험은 남아 있다.
-- 핵심 미완료: AutoUpdate 자체 `build.json`과 언어 중립 CLI `resolve` 연결 규약을 추가했고, 실제 설치된 v0.1.1302에서 아키텍처까지 검사하는 검증 API가 정상 동작했다. 로컬 AutoUpdate 빌드에서 GitHub 최신 선택·설치를 실운전 확인했다. app-base 등 각 실제 앱의 최초 `build.json`·얇은 연결부 통합, 실제 화면에서 live 적용과 상태보존 재시작·롤백 검증이 남았다. 공용 엔진 수정의 연결 앱 전파, app-base 등 기존 프로그램 연결, 실제 UI의 live/restart 상태 보존 확인도 남았다. 이를 완료하기 전에는 “모든 프로그램 자동패치 완료”로 보지 않는다.
+- 핵심 미완료: AutoUpdate 자체 `build.json`, `register`·언어 중립 `resolve` CLI, 검증 API가 구현됐고 설치본에서 확인됐다. app-base에 최초 공용 연결부를 넣고 상태 보존 통합시험까지 통과했다. 새 app-base 릴리스가 아직 배포되지 않아 실제 등록 앱으로의 패키지 전달·적용은 다음 검증이다. 기존 앱과 새 프로젝트는 최초 연결 설정이 필요하며, 연결된 앱에서 AutoUpdate 코어 수정이 공통으로 적용되는지 첫 실운전으로 확인해야 완료 처리한다.
 
 이 작업은 공용 엔진의 자동 전파와 라이브/재시작 경계를 먼저 완성·검증한다. 기존 앱의 최초 공용 런타임 채택은 공통 연결 계약으로 처리하고, 이후 앱마다 업데이트 엔진을 다시 패치하지 않도록 한다. MA는 포함하지 않는다.
 
 ## 사용 예
 
-`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 검증한다. 앱 연결부는 같은 CLI의 `-Command resolve`를 호출해 검증된 경로·버전·모드를 JSON으로 받는다. 앱을 등록하는 명령은 다음 형태다.
+`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 검증한다. 앱 연결부는 같은 CLI의 `-Command resolve`를 호출해 검증된 경로·버전·모드를 JSON으로 받는다. 앱은 `-Command register -AppId <앱 ID> -Owner <소유자> -Repository <저장소> -Architecture <구조>`로 자동 등록할 수 있고, 수동 등록 스크립트는 다음 형태다.
 
 `tools/register-app.ps1 -AppId Alarm -Owner siny-dev -Repository alarm -Architecture x64`
 
