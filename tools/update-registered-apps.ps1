@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'read-update-policy.ps1')
+. (Join-Path $PSScriptRoot 'shared-cycle-lock.ps1')
 $sourceModule=Join-Path $root 'source\AutoUpdate.Core.psm1'
 $logRoot=Join-Path $StateRoot 'logs';[void][IO.Directory]::CreateDirectory($logRoot)
 $logPath=Join-Path $logRoot 'app-updates.jsonl'
@@ -37,6 +38,13 @@ function Import-EngineModule([string]$ModulePath){
     if($ModulePath -match '[\\/]versions[\\/](\d+\.\d+\.\d+)[\\/]') {$script:activeEngineVersion=$Matches[1]} else {$script:activeEngineVersion='source'}
 }
 function Invoke-UpdateCycle{
+    $sharedLockPath=Join-Path $root 'outbox\locks\registered-apps.lock'
+    $sharedLock=Enter-AuSharedCycleLock -Path $sharedLockPath -TimeoutMilliseconds 60000
+    if($null -eq $sharedLock){
+        Write-UpdateLog ([pscustomobject]@{AppId=$null;Status='shared-cycle-lock-timeout';Version=$null;Message='Another PC is updating shared packages; this cycle will retry at the next interval.'})
+        return
+    }
+    try{
     $modulePath=Resolve-EngineModule
     Import-EngineModule $modulePath
     $mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateRegisteredApps');$owned=$false
@@ -100,6 +108,7 @@ function Invoke-UpdateCycle{
             }
         }
     }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
+    }finally{Exit-AuSharedCycleLock -LockHandle $sharedLock}
 }
 $workerMutex=[Threading.Mutex]::new($false,'Local\AutoUpdateRegisteredAppsWorker');$workerOwned=$false
 $runnerPath=$PSCommandPath
