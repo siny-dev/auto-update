@@ -1,22 +1,5 @@
-param([switch]$Remove)
+param([switch]$Remove,[ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'))
 $ErrorActionPreference='Stop'
-$TaskName='AutoUpdate Source Sync'
-$Root=Split-Path -Parent $PSScriptRoot
-$Script=Join-Path $PSScriptRoot 'sync.ps1'
-$PowerShell=Join-Path $PSHOME 'pwsh.exe'
-if(-not (Test-Path -LiteralPath $PowerShell)){$PowerShell=Join-Path $PSHOME 'powershell.exe'}
-if(-not (Test-Path -LiteralPath $PowerShell)){$PowerShell=(Get-Command pwsh.exe,powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
-if(-not (Test-Path -LiteralPath $Script)){throw 'sync.ps1 is missing'}
-if($Remove){
- Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
- Write-Output 'AutoUpdate source sync task removed'
- exit 0
-}
-$arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$Script+'" -IntervalMinutes 10'
-$action=New-ScheduledTaskAction -Execute $PowerShell -Argument $arguments -WorkingDirectory $Root
-$trigger=New-ScheduledTaskTrigger -AtLogOn -User ($env:USERDOMAIN+'\'+$env:USERNAME)
-$settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
-$principal=New-ScheduledTaskPrincipal -UserId ($env:USERDOMAIN+'\'+$env:USERNAME) -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Sync AutoUpdate local source with its GitHub main branch without opening a browser' -Force | Out-Null
-Start-ScheduledTask -TaskName $TaskName
-Write-Output 'AutoUpdate source sync task installed and started in the background'
+$installer=Join-Path $PSScriptRoot 'install-background.ps1'
+if(-not (Test-Path -LiteralPath $installer)){throw 'install-background.ps1 is missing'}
+& $installer -Remove:$Remove -IntervalMinutes $IntervalMinutes -StateRoot $StateRoot
