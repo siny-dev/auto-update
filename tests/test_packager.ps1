@@ -44,3 +44,4 @@ try {
 }
 & (Join-Path $PSScriptRoot 'test_candidates.ps1')
 & (Join-Path $PSScriptRoot 'test_publish.ps1')
+& (Join-Path $PSScriptRoot 'test_local_build.ps1')

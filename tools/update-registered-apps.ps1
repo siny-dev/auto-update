@@ -25,7 +25,7 @@ function Resolve-EngineModule{
     if($entry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $versionRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $entry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal')
+    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal','function Get-AuLatestReleaseManifest')
     foreach($required in $requiredFunctions){if(-not (Select-String -LiteralPath $candidate -SimpleMatch $required -Quiet)){return $sourceModule}}
     return $candidate
 }
@@ -43,6 +43,19 @@ function Invoke-UpdateCycle{
         }
         foreach($app in (Get-AuRegisteredApps -StateRoot $StateRoot)){
             $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
+            $buildRecipe=Join-Path $localPackageRoot 'build.json'
+            if(Test-Path -LiteralPath $buildRecipe -PathType Leaf){
+                try{
+                    $remoteVersion=$null
+                    try{$remoteManifest=Get-AuLatestReleaseManifest -Owner $app.owner -Repository $app.repository -AppId $app.app_id -Architecture $app.architecture;$remoteVersion=[string]$remoteManifest.Manifest.version}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+                    $buildResultText=& (Join-Path $root 'tools\build-local-package.ps1') -RecipePath $buildRecipe -PackageRoot $localPackageRoot -RemoteVersion $remoteVersion
+                    $buildResult=$buildResultText|ConvertFrom-Json
+                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=('build-'+$buildResult.status);Version=$buildResult.version;Message=$buildResult.message})
+                }catch{
+                    $buildMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
+                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='build-failed';Version=$null;Message=$buildMessage})
+                }
+            }
             $localPackage=Get-AuLatestLocalPackage -PackageRoot $localPackageRoot -AppId $app.app_id -Architecture $app.architecture
             if($localPackage){
                 try{

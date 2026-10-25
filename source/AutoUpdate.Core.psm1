@@ -581,4 +581,4 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
