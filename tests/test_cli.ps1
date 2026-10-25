@@ -4,6 +4,10 @@ $cli=Join-Path $PSScriptRoot '..\tools\autoupdate.ps1'
 Import-Module $module -Force
 $root=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdateCliTest-'+[guid]::NewGuid().ToString('N'))
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
+Assert (Test-AuReleaseTagVersion -Tag 'V1.0.010' -Version '1.0.10') 'Zero-padded uppercase application release tag was not matched semantically'
+Assert (Test-AuReleaseTagVersion -Tag 'v0.1.1304' -Version '0.1.1304') 'Standard AutoUpdate release tag was rejected'
+Assert (-not (Test-AuReleaseTagVersion -Tag 'V1.0.011' -Version '1.0.10')) 'Mismatched release tag was accepted'
+Assert (-not (Test-AuReleaseTagVersion -Tag 'release-1.0.10' -Version '1.0.10')) 'Non-semantic release tag was accepted'
 function Invoke-Cli([string]$App,[string]$Architecture='x64'){
     $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
     $output=& $exe -NoLogo -NoProfile -NonInteractive -File $cli -Command resolve -StateRoot (Join-Path $root 'state') -AppId $App -Architecture $Architecture 2>$null

@@ -14,6 +14,11 @@ function Test-AuVersionAtLeast([string]$Current,[string]$Minimum) {
     catch { return $false }
 }
 
+function Test-AuReleaseTagVersion([string]$Tag,[string]$Version) {
+    if($Tag -notmatch '^[vV]?\d+\.\d+\.\d+$' -or $Version -notmatch '^\d+\.\d+\.\d+$'){return $false}
+    try{return ([version]$Tag.TrimStart('v','V') -eq [version]$Version)}catch{return $false}
+}
+
 function Test-AuManifest {
     [CmdletBinding()]
     param(
@@ -203,7 +208,7 @@ function Install-AuLatestRelease {
         $manifest=[Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
         Test-AuManifest -Manifest $manifest -ExpectedAppId $AppId | Out-Null
         if ($manifest.architecture -ne 'any' -and $manifest.architecture -ne $Architecture) { throw 'Release architecture mismatch.' }
-        if ($release.tag_name -ne ('v'+$manifest.version)) { throw 'Release tag and manifest version do not match.' }
+        if (-not (Test-AuReleaseTagVersion -Tag ([string]$release.tag_name) -Version ([string]$manifest.version))) { throw 'Release tag and manifest version do not match.' }
     }
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if ($current -and $current.Version -eq [string]$manifest.version) {
@@ -275,7 +280,7 @@ function Get-AuLatestReleaseManifest {
         $manifest=[Text.Encoding]::UTF8.GetString($manifestBytes)|ConvertFrom-Json
         Test-AuManifest -Manifest $manifest -ExpectedAppId $AppId|Out-Null
         if($manifest.architecture -ne 'any' -and $manifest.architecture -ne $Architecture){throw 'Release architecture mismatch.'}
-        if($release.tag_name -ne ('v'+$manifest.version)){throw 'Release tag and manifest version do not match.'}
+        if(-not (Test-AuReleaseTagVersion -Tag ([string]$release.tag_name) -Version ([string]$manifest.version))){throw 'Release tag and manifest version do not match.'}
         return [pscustomobject]@{Manifest=$manifest;Release=$release;ManifestBytes=$manifestBytes}
     }finally{$token=$null}
 }
@@ -602,4 +607,4 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
