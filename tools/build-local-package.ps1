@@ -67,9 +67,12 @@ function Get-NextPackageVersion([version]$Current){
     throw 'Package version counter exhausted.'
 }
 $fingerprint=Get-RecipeFingerprint $spec $payloadRoot
-if($state -and $state.source_fingerprint -ceq $fingerprint){[pscustomobject]@{status='unchanged';app_id=$spec.app_id;version=$state.version;message='Source files have not changed.'}|ConvertTo-Json -Compress;exit 0}
 $architecture=[string]$spec.architecture;if($architecture -notin @('any','x86','x64','arm64')){throw 'Build recipe has an invalid architecture.'}
 $existingPackage=Get-AuLatestLocalPackage -PackageRoot $packageDirectory -AppId ([string]$spec.app_id) -Architecture $architecture
+if($state -and $state.source_fingerprint -ceq $fingerprint -and $existingPackage -and [string]$existingPackage.Manifest.version -ceq [string]$state.version -and (Test-RecipeMatchesManifest $spec $payloadRoot $existingPackage.Manifest)){
+    [pscustomobject]@{status='unchanged';app_id=$spec.app_id;version=$state.version;message='Source files and the last built package are unchanged.'}|ConvertTo-Json -Compress
+    exit 0
+}
 if($existingPackage -and (Test-RecipeMatchesManifest $spec $payloadRoot $existingPackage.Manifest)){
     Write-BuildState $statePath ([ordered]@{schema=1;app_id=[string]$spec.app_id;version=[string]$existingPackage.Manifest.version;source_fingerprint=$fingerprint;updated_utc=[DateTime]::UtcNow.ToString('o')})
     [pscustomobject]@{status='unchanged';app_id=$spec.app_id;version=[string]$existingPackage.Manifest.version;message='Source files already match an existing package.'}|ConvertTo-Json -Compress
