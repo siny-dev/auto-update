@@ -201,8 +201,8 @@ function Install-AuLatestRelease {
         $releaseBytes=Invoke-AuGitHubGet -Uri $releaseUri -Token $token -Accept 'application/vnd.github+json' -MaximumBytes 2097152
         $release=[Text.Encoding]::UTF8.GetString($releaseBytes) | ConvertFrom-Json
         if ($release.draft -or $release.prerelease) { throw 'Latest GitHub release is not a stable release.' }
-        $manifestAsset=@($release.assets | Where-Object { $_.name -ceq 'autoupdate-manifest.json' })
-        if ($manifestAsset.Count -ne 1 -or $manifestAsset[0].size -gt 1048576) { throw 'Release must contain exactly one small autoupdate-manifest.json asset.' }
+        $manifestAsset=Get-AuReleaseManifestAsset -Release $release
+        if (-not $manifestAsset) { throw 'Latest GitHub release has no AutoUpdate package manifest.' }
         $manifestUri=[uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($manifestAsset[0].id)"
         $manifestBytes=Invoke-AuGitHubGet -Uri $manifestUri -Token $token -Accept 'application/octet-stream' -MaximumBytes 1048576
         $manifest=[Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
@@ -265,6 +265,19 @@ function Compare-AuPackageCandidates {
     return 'conflict'
 }
 
+function Get-AuReleaseManifestAsset {
+    param([Parameter(Mandatory=$true)]$Release)
+    $manifestAsset=@($Release.assets|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
+    if($manifestAsset.Count -eq 0){return $null}
+    if($manifestAsset.Count -ne 1 -or [long]$manifestAsset[0].size -gt 1048576){throw 'Release must contain exactly one small autoupdate-manifest.json asset.'}
+    return $manifestAsset[0]
+}
+function Select-AuPackageWinner {
+    param($LocalManifest,$RemoteManifest)
+    if(-not $LocalManifest){if($RemoteManifest){return 'github'};return 'none'}
+    if(-not $RemoteManifest){return 'local'}
+    return Compare-AuPackageCandidates -LocalManifest $LocalManifest -RemoteManifest $RemoteManifest
+}
 function Get-AuLatestReleaseManifest {
     param([string]$Owner,[string]$Repository,[string]$AppId,[string]$Architecture)
     if($Owner -notmatch '^[A-Za-z0-9-]+$' -or $Repository -notmatch '^[A-Za-z0-9._-]+$'){throw 'Invalid GitHub repository identity.'}
@@ -273,8 +286,8 @@ function Get-AuLatestReleaseManifest {
         $releaseBytes=Invoke-AuGitHubGet -Uri ([uri]"https://api.github.com/repos/$Owner/$Repository/releases/latest") -Token $token -Accept 'application/vnd.github+json' -MaximumBytes 2097152
         $release=[Text.Encoding]::UTF8.GetString($releaseBytes)|ConvertFrom-Json
         if($release.draft -or $release.prerelease){throw 'Latest GitHub release is not a stable release.'}
-        $manifestAsset=@($release.assets|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
-        if($manifestAsset.Count -ne 1 -or $manifestAsset[0].size -gt 1048576){throw 'Release must contain exactly one small autoupdate-manifest.json asset.'}
+        $manifestAsset=Get-AuReleaseManifestAsset -Release $release
+        if(-not $manifestAsset){return $null} # Legacy release: no common package was published.
         $manifestUri=[uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($manifestAsset[0].id)"
         $manifestBytes=Invoke-AuGitHubGet -Uri $manifestUri -Token $token -Accept 'application/octet-stream' -MaximumBytes 1048576
         $manifest=[Text.Encoding]::UTF8.GetString($manifestBytes)|ConvertFrom-Json
@@ -469,9 +482,12 @@ function Install-AuLatestAvailable {
         [Parameter(Mandatory=$true)][string]$Architecture,[Parameter(Mandatory=$true)][string]$LocalPackageRoot
     )
     $local=Get-AuLatestLocalPackage -PackageRoot $LocalPackageRoot -AppId $AppId -Architecture $Architecture
-    if(-not $local){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -LocalPackageRoot $LocalPackageRoot}
     $remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture
-    $winner=Compare-AuPackageCandidates -LocalManifest $local.Manifest -RemoteManifest $remote.Manifest
+    if(-not $local){
+        if(-not $remote){return [pscustomobject]@{Status='legacy-release';AppId=$AppId;Version=$null;Path=$null;Mode=$null;Message='The latest GitHub release has no AutoUpdate package manifest; waiting for a compatible package.'}}
+        return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote -LocalPackageRoot $LocalPackageRoot
+    }
+    $winner=Select-AuPackageWinner -LocalManifest $local.Manifest -RemoteManifest $remote.Manifest
     if($winner -eq 'conflict'){return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$local.Manifest.version;Path=$null;Mode=$null;Message='Local and GitHub packages have the same version but different contents; both were preserved.'}}
     $selectedVersion=if($winner -eq 'github'){[string]$remote.Manifest.version}else{[string]$local.Manifest.version}
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId

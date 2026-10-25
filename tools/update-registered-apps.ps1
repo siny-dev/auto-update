@@ -54,7 +54,7 @@ function Invoke-UpdateCycle{
             if(Test-Path -LiteralPath $buildRecipe -PathType Leaf){
                 try{
                     $remoteVersion=$null
-                    try{$remoteManifest=Get-AuLatestReleaseManifest -Owner $app.owner -Repository $app.repository -AppId $app.app_id -Architecture $app.architecture;$remoteVersion=[string]$remoteManifest.Manifest.version}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+                    try{$remoteManifest=Get-AuLatestReleaseManifest -Owner $app.owner -Repository $app.repository -AppId $app.app_id -Architecture $app.architecture;if($remoteManifest){$remoteVersion=[string]$remoteManifest.Manifest.version}}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
                     $buildResultText=& (Join-Path $root 'tools\build-local-package.ps1') -RecipePath $buildRecipe -PackageRoot $localPackageRoot -RemoteVersion $remoteVersion
                     $buildResult=$buildResultText|ConvertFrom-Json
                     Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=('build-'+$buildResult.status);Version=$buildResult.version;Message=$buildResult.message})

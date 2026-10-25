@@ -44,6 +44,18 @@ try{
     $sameVersionConflict=Install-AuPackage -PackageRoot (Join-Path $testRoot 'conflicting') -StateRoot (Join-Path $testRoot 'state') -AppId demo -Architecture x64
     Assert ($sameVersionConflict.Status -eq 'conflict') 'same-version changed installed package was silently accepted'
     'PASS: highest local version, GitHub/local winner, same-hash equality, same-version conflict, and local staging'
+    $module=Get-Module AutoUpdate.Core | Select-Object -Last 1
+    $legacyRelease=[pscustomobject]@{assets=@([pscustomobject]@{name='workboard.exe';size=123})}
+    $legacyAsset=& $module {param($release) Get-AuReleaseManifestAsset -Release $release} $legacyRelease
+    Assert ($null -eq $legacyAsset) 'legacy GitHub release without a common manifest was not recognized'
+    $validRelease=[pscustomobject]@{assets=@([pscustomobject]@{name='autoupdate-manifest.json';size=64})}
+    Assert ((& $module {param($release) Get-AuReleaseManifestAsset -Release $release} $validRelease).name -eq 'autoupdate-manifest.json') 'valid common manifest asset was rejected'
+    $duplicateRelease=[pscustomobject]@{assets=@([pscustomobject]@{name='autoupdate-manifest.json';size=64},[pscustomobject]@{name='autoupdate-manifest.json';size=64})}
+    $assetFailed=$false;try{& $module {param($release) Get-AuReleaseManifestAsset -Release $release} $duplicateRelease|Out-Null}catch{$assetFailed=$true}
+    Assert $assetFailed 'duplicate common manifest assets were accepted'
+    Assert ((& $module {param($local,$remote) Select-AuPackageWinner -LocalManifest $local -RemoteManifest $remote} $m2 $null) -eq 'local') 'verified local package did not win when GitHub has no AutoUpdate manifest'
+    Assert ((& $module {param($local,$remote) Select-AuPackageWinner -LocalManifest $local -RemoteManifest $remote} $null $m2) -eq 'github') 'GitHub package was not selected when no local package exists'
+    'PASS: legacy release without common manifest falls back to the verified local package; malformed manifest assets remain rejected'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-candidate-test-')){throw 'refusing unsafe test cleanup'}
