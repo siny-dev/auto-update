@@ -10,7 +10,7 @@
     "contract": {"const": "autoupdate-app-v1"},
     "app_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
     "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
-    "mode": {"enum": ["live", "restart"]},
+    "mode": {"enum": ["live", "restart"], "default": "live", "description": "Default is live for data/resources; executable or runtime files require restart mode."},
     "platform": {"const": "windows"},
     "architecture": {"enum": ["any", "x86", "x64", "arm64"]},
     "minimum_engine": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
