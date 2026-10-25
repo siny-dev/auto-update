@@ -104,7 +104,8 @@ try{
         }
         if(-not $Once){
             Start-Sleep -Seconds ($IntervalMinutes*60)
-            if((Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash -cne $runnerHash){$restartForSourceChange=$true;break}
+            try{if((Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash -cne $runnerHash){$restartForSourceChange=$true;break}}
+            catch{Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='runner-hash-check-failed';Version=$null;Message='Could not check the shared worker file; it will retry after the next interval.'})}
         }
     }while(-not $Once)
 }finally{if($workerOwned){$workerMutex.ReleaseMutex()};$workerMutex.Dispose()}
@@ -115,5 +116,11 @@ if($restartForSourceChange){
     if(-not $shell){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
     $quote={param([string]$Value) '"'+$Value.Replace('"','\"')+'"'}
     $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '+(& $quote $runnerPath)+' -IntervalMinutes '+$IntervalMinutes+' -StateRoot '+(& $quote $StateRoot)
-    Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null
+    try{
+        Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null
+        Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='runner-restart-requested';Version=$null;Message='The shared worker changed; the current worker handed off to the updated script.'})
+    }catch{
+        $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
+        Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='runner-restart-failed';Version=$null;Message=$message})
+    }
 }

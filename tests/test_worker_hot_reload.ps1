@@ -11,7 +11,7 @@ $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Loca
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
 $script:EngineLabel='@@LABEL@@'
-function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'},[pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'}) }
+function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'}) }
 function Register-AuApplication { param($StateRoot,$AppId,$Owner,$Repository,$Architecture); [pscustomobject]@{Status='registered'} }
 function Get-AuLatestLocalPackage { param($PackageRoot,$AppId,$Architecture); $null }
 function Get-AuLatestReleaseManifest { param($Owner,$Repository,$AppId,$Architecture); $null }
