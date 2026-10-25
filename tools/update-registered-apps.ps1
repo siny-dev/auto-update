@@ -29,10 +29,13 @@ function Resolve-EngineModule{
     foreach($required in $requiredFunctions){if(-not (Select-String -LiteralPath $candidate -SimpleMatch $required -Quiet)){return $sourceModule}}
     return $candidate
 }
+function Import-EngineModule([string]$ModulePath){
+    Remove-Module AutoUpdate.Core -ErrorAction SilentlyContinue
+    Import-Module $ModulePath -Force -Global
+}
 function Invoke-UpdateCycle{
     $modulePath=Resolve-EngineModule
-    Remove-Module AutoUpdate.Core -ErrorAction SilentlyContinue
-    Import-Module $modulePath -Force -Global
+    Import-EngineModule $modulePath
     $mutex=[Threading.Mutex]::new($false,'Local\AutoUpdateRegisteredApps');$owned=$false
     try{
         try{$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
@@ -70,6 +73,14 @@ function Invoke-UpdateCycle{
                 $result=Install-AuLatestAvailable -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture -LocalPackageRoot $localPackageRoot
                 $message=if($result.Message){[string]$result.Message}else{'Local and GitHub package check completed'}
                 Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$result.Status;Version=$result.Version;Message=$message})
+                if($app.app_id -ceq 'AutoUpdate'){
+                    $newModulePath=Resolve-EngineModule
+                    if(-not [string]::Equals([IO.Path]::GetFullPath($modulePath),[IO.Path]::GetFullPath($newModulePath),[StringComparison]::OrdinalIgnoreCase)){
+                        Import-EngineModule $newModulePath
+                        $modulePath=$newModulePath
+                        Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='engine-hot-reloaded';Version=$null;Message='The newly installed common engine will handle the remaining apps in this cycle.'})
+                    }
+                }
             }catch{
                 $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
                 Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='failed';Version=$null;Message=$message})
@@ -78,6 +89,9 @@ function Invoke-UpdateCycle{
     }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
 $workerMutex=[Threading.Mutex]::new($false,'Local\AutoUpdateRegisteredAppsWorker');$workerOwned=$false
+$runnerPath=$PSCommandPath
+$runnerHash=(Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash
+$restartForSourceChange=$false
 try{
     try{$workerOwned=$workerMutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$workerOwned=$true}
     if(-not $workerOwned){exit 0}
@@ -86,6 +100,18 @@ try{
             $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
             Write-UpdateLog ([pscustomobject]@{AppId=$null;Status='failed';Version=$null;Message=$message})
         }
-        if(-not $Once){Start-Sleep -Seconds ($IntervalMinutes*60)}
+        if(-not $Once){
+            Start-Sleep -Seconds ($IntervalMinutes*60)
+            if((Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash -cne $runnerHash){$restartForSourceChange=$true;break}
+        }
     }while(-not $Once)
 }finally{if($workerOwned){$workerMutex.ReleaseMutex()};$workerMutex.Dispose()}
+if($restartForSourceChange){
+    $shell=Join-Path $PSHOME 'pwsh.exe'
+    if(-not (Test-Path -LiteralPath $shell)){$shell=Join-Path $PSHOME 'powershell.exe'}
+    if(-not (Test-Path -LiteralPath $shell)){$shell=(Get-Command pwsh.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source}
+    if(-not $shell){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
+    $quote={param([string]$Value) '"'+$Value.Replace('"','\"')+'"'}
+    $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '+(& $quote $runnerPath)+' -IntervalMinutes '+$IntervalMinutes+' -StateRoot '+(& $quote $StateRoot)
+    Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null
+}
