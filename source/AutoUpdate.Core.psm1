@@ -147,40 +147,104 @@ function Register-AuApplication {
     }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
 
+function Get-AuGitHubErrorBody {
+    param([Parameter(Mandatory=$true)][Net.HttpWebResponse]$Response)
+    try{
+        $stream=$Response.GetResponseStream()
+        if($null -eq $stream){return ''}
+        $reader=[IO.StreamReader]::new($stream)
+        try{$text=$reader.ReadToEnd();if($text.Length -gt 65536){return $text.Substring(0,65536)};return $text}
+        finally{$reader.Dispose()}
+    }catch{return ''}
+}
+
+function Get-AuGitHubRateLimitDelaySeconds {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][int]$StatusCode,
+        [string]$RetryAfter,
+        [string]$RateLimitRemaining,
+        [string]$RateLimitReset,
+        [int]$RetryNumber=1,
+        [switch]$RateLimitIndicated,
+        [DateTimeOffset]$NowUtc=[DateTimeOffset]::UtcNow
+    )
+    if($StatusCode -notin @(403,429)){return $null}
+    $hasRetryAfter=-not [string]::IsNullOrWhiteSpace($RetryAfter)
+    $primaryExhausted=([string]$RateLimitRemaining -eq '0')
+    if($StatusCode -ne 429 -and -not $hasRetryAfter -and -not $primaryExhausted -and -not $RateLimitIndicated){return $null}
+
+    [long]$delay=0
+    [long]$parsed=0
+    if($hasRetryAfter -and [long]::TryParse($RetryAfter.Trim(),[ref]$parsed) -and $parsed -gt 0){
+        $delay=$parsed
+    }elseif($primaryExhausted -and [long]::TryParse([string]$RateLimitReset,[ref]$parsed)){
+        $delay=$parsed-$NowUtc.ToUnixTimeSeconds()
+    }
+    if($delay -le 0){
+        $exponent=[Math]::Max(0,[Math]::Min(10,$RetryNumber-1))
+        $delay=[long](60*[Math]::Pow(2,$exponent))
+    }
+    return [long][Math]::Max(1,$delay)
+}
+
+function Wait-AuGitHubRetryDelay {
+    param([Parameter(Mandatory=$true)][long]$Seconds)
+    while($Seconds -gt 0){
+        $slice=[int][Math]::Min($Seconds,300)
+        Start-Sleep -Seconds $slice
+        $Seconds-=$slice
+    }
+}
 function Invoke-AuGitHubGet {
     param([Parameter(Mandatory=$true)][uri]$Uri,[Parameter(Mandatory=$true)][string]$Token,[Parameter(Mandatory=$true)][string]$Accept,[string]$OutFile,[long]$MaximumBytes=16777216)
     $current=$Uri
-    for ($hop=0; $hop -lt 5; $hop++) {
-        if ($current.Scheme -ne 'https' -or $current.Host -notin @('api.github.com','github.com','release-assets.githubusercontent.com','objects.githubusercontent.com')) { throw 'GitHub response used an untrusted or non-HTTPS host.' }
+    $redirectHops=0
+    $rateLimitRetries=0
+    while($true){
+        if($current.Scheme -ne 'https' -or $current.Host -notin @('api.github.com','github.com','release-assets.githubusercontent.com','objects.githubusercontent.com')){throw 'GitHub response used an untrusted or non-HTTPS host.'}
         $request=[Net.HttpWebRequest]::Create($current)
         $request.Method='GET';$request.AllowAutoRedirect=$false;$request.UserAgent='Siny-AutoUpdate/0.1';$request.Accept=$Accept;$request.Timeout=20000;$request.ReadWriteTimeout=30000
         $request.Headers['X-GitHub-Api-Version']='2022-11-28'
-        if ($current.Host -eq 'api.github.com') { $request.Headers['Authorization']='Bearer '+$Token }
-        try { $response=[Net.HttpWebResponse]$request.GetResponse() }
-        catch [Net.WebException] { if ($_.Exception.Response) {$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub request failed before receiving a response.'} }
-        try {
-            if ([int]$response.StatusCode -in @(301,302,303,307,308)) {
+        if($current.Host -eq 'api.github.com'){$request.Headers['Authorization']='Bearer '+$Token}
+        try{$response=[Net.HttpWebResponse]$request.GetResponse()}
+        catch [Net.WebException]{if($_.Exception.Response){$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub request failed before receiving a response.'}}
+        try{
+            $status=[int]$response.StatusCode
+            if($status -in @(301,302,303,307,308)){
+                if($redirectHops -ge 4){throw 'GitHub redirect limit was exceeded.'}
                 $location=$response.Headers['Location'];if(-not $location){throw 'GitHub redirect did not include a location.'}
-                $current=[uri]::new($current,$location);continue
+                $current=[uri]::new($current,$location);$redirectHops++;continue
             }
-            if ([int]$response.StatusCode -ne 200) { throw "GitHub returned HTTP $([int]$response.StatusCode)." }
-            if ($response.ContentLength -gt $MaximumBytes) { throw 'GitHub asset exceeds the configured size limit.' }
-            if ($OutFile) {
+            if($status -in @(403,429)){
+                $errorBody=Get-AuGitHubErrorBody -Response $response
+                $indicated=$errorBody -match '(?i)(secondary\s+rate\s+limit|rate\s+limit\s+exceeded|abuse\s+detection)'
+                $delay=Get-AuGitHubRateLimitDelaySeconds -StatusCode $status -RetryAfter ([string]$response.Headers['Retry-After']) -RateLimitRemaining ([string]$response.Headers['X-RateLimit-Remaining']) -RateLimitReset ([string]$response.Headers['X-RateLimit-Reset']) -RetryNumber ($rateLimitRetries+1) -RateLimitIndicated:$indicated
+                if($null -ne $delay){
+                    if($rateLimitRetries -ge 3){throw "GitHub request remained rate limited after 3 retries (HTTP $status)."}
+                    $rateLimitRetries++
+                    $response.Dispose()
+                    Wait-AuGitHubRetryDelay -Seconds $delay
+                    continue
+                }
+            }
+            if($status -ne 200){throw "GitHub returned HTTP $status."}
+            if($response.ContentLength -gt $MaximumBytes){throw 'GitHub asset exceeds the configured size limit.'}
+            if($OutFile){
                 $destination=[IO.File]::Open($OutFile,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-                try {
-                    $inputStream=$response.GetResponseStream();$buffer=New-Object byte[] 65536;$total=0
-                    while(($read=$inputStream.Read($buffer,0,$buffer.Length)) -gt 0) { $total += $read;if($total -gt $MaximumBytes){throw 'GitHub asset exceeds the configured size limit.'};$destination.Write($buffer,0,$read) }
-                } finally { if($inputStream){$inputStream.Dispose()};$destination.Dispose() }
+                try{$inputStream=$response.GetResponseStream();$buffer=New-Object byte[] 65536;$total=0
+                    while(($read=$inputStream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $MaximumBytes){throw 'GitHub asset exceeds the configured size limit.'};$destination.Write($buffer,0,$read)}
+                }finally{if($inputStream){$inputStream.Dispose()};$destination.Dispose()}
                 return $null
             }
             $stream=$response.GetResponseStream();$memory=New-Object IO.MemoryStream
-            try { $buffer=New-Object byte[] 65536;$total=0;while(($read=$stream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $MaximumBytes){throw 'GitHub response exceeds the configured size limit.'};$memory.Write($buffer,0,$read)};return $memory.ToArray() }
-            finally { $stream.Dispose();$memory.Dispose() }
-        } finally { $response.Dispose() }
+            try{$buffer=New-Object byte[] 65536;$total=0
+                while(($read=$stream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $MaximumBytes){throw 'GitHub response exceeds the configured size limit.'};$memory.Write($buffer,0,$read)}
+                return $memory.ToArray()
+            }finally{$stream.Dispose();$memory.Dispose()}
+        }finally{$response.Dispose()}
     }
-    throw 'GitHub redirect limit was exceeded.'
 }
-
 function Install-AuLatestRelease {
     [CmdletBinding()]
     param(
@@ -302,22 +366,38 @@ function Invoke-AuGitHubApiJson {
     [CmdletBinding()]
     param([ValidateSet('GET','POST','PATCH','DELETE')][string]$Method,[Parameter(Mandatory=$true)][uri]$Uri,[Parameter(Mandatory=$true)][string]$Token,$Body)
     if($Uri.Scheme -cne 'https' -or $Uri.Host -cne 'api.github.com'){throw 'GitHub API request must use api.github.com over HTTPS.'}
-    $request=[Net.HttpWebRequest]::Create($Uri);$request.Method=$Method;$request.AllowAutoRedirect=$false
-    $request.UserAgent='Siny-AutoUpdate/0.1';$request.Accept='application/vnd.github+json';$request.ContentType='application/json; charset=utf-8';$request.Timeout=20000;$request.ReadWriteTimeout=30000
-    $request.Headers['Authorization']='Bearer '+$Token;$request.Headers['X-GitHub-Api-Version']='2022-11-28'
-    if($null -ne $Body){$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Body|ConvertTo-Json -Depth 16 -Compress));$request.ContentLength=$bytes.Length;$stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()}}
-    try{$response=[Net.HttpWebResponse]$request.GetResponse()}
-    catch [Net.WebException]{if($_.Exception.Response){$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub API request failed before receiving a response.'}}
-    try{
-        $status=[int]$response.StatusCode
-        if($Method -eq 'DELETE' -and $status -eq 204){return $null}
-        if($status -lt 200 -or $status -ge 300){throw "GitHub API returned HTTP $status."}
-        $reader=[IO.StreamReader]::new($response.GetResponseStream());try{$json=$reader.ReadToEnd()}finally{$reader.Dispose()}
-        if([string]::IsNullOrWhiteSpace($json)){return $null}
-        return ($json|ConvertFrom-Json)
-    }finally{$response.Dispose()}
+    $rateLimitRetries=0
+    while($true){
+        $request=[Net.HttpWebRequest]::Create($Uri);$request.Method=$Method;$request.AllowAutoRedirect=$false
+        $request.UserAgent='Siny-AutoUpdate/0.1';$request.Accept='application/vnd.github+json';$request.ContentType='application/json; charset=utf-8';$request.Timeout=20000;$request.ReadWriteTimeout=30000
+        $request.Headers['Authorization']='Bearer '+$Token;$request.Headers['X-GitHub-Api-Version']='2022-11-28'
+        if($null -ne $Body){$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Body|ConvertTo-Json -Depth 16 -Compress));$request.ContentLength=$bytes.Length;$stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()}}
+        try{$response=[Net.HttpWebResponse]$request.GetResponse()}
+        catch [Net.WebException]{if($_.Exception.Response){$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub API request failed before receiving a response.'}}
+        try{
+            $status=[int]$response.StatusCode
+            if($status -eq 204 -and $Method -eq 'DELETE'){return $null}
+            if($status -in @(403,429)){
+                $errorBody=Get-AuGitHubErrorBody -Response $response
+                $indicated=$errorBody -match '(?i)(secondary\s+rate\s+limit|rate\s+limit\s+exceeded|abuse\s+detection)'
+                $delay=Get-AuGitHubRateLimitDelaySeconds -StatusCode $status -RetryAfter ([string]$response.Headers['Retry-After']) -RateLimitRemaining ([string]$response.Headers['X-RateLimit-Remaining']) -RateLimitReset ([string]$response.Headers['X-RateLimit-Reset']) -RetryNumber ($rateLimitRetries+1) -RateLimitIndicated:$indicated
+                if($null -ne $delay){
+                    if($Method -ne 'GET'){throw "GitHub API rate limited this $Method request (HTTP $status); retry after $delay seconds in a later update cycle."}
+                    if($rateLimitRetries -ge 3){throw "GitHub API GET remained rate limited after 3 retries (HTTP $status)."}
+                    $rateLimitRetries++
+                    $response.Dispose()
+                    Wait-AuGitHubRetryDelay -Seconds $delay
+                    continue
+                }
+            }
+            if($status -lt 200 -or $status -ge 300){throw "GitHub API returned HTTP $status."}
+            $reader=[IO.StreamReader]::new($response.GetResponseStream())
+            try{$json=$reader.ReadToEnd()}finally{$reader.Dispose()}
+            if([string]::IsNullOrWhiteSpace($json)){return $null}
+            return ($json|ConvertFrom-Json)
+        }finally{$response.Dispose()}
+    }
 }
-
 function Send-AuGitHubReleaseAsset {
     param([Parameter(Mandatory=$true)][uri]$UploadUri,[Parameter(Mandatory=$true)][string]$Token,[Parameter(Mandatory=$true)][string]$Name,[Parameter(Mandatory=$true)][string]$Path)
     if($UploadUri.Scheme -cne 'https' -or $UploadUri.Host -cne 'uploads.github.com'){throw 'GitHub asset upload URL is not trusted.'}
