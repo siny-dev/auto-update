@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('install','update','status','resolve')][string]$Command,
+    [Parameter(Mandatory=$true)][ValidateSet('install','update','status','resolve','register')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$AppId='AutoUpdate',
@@ -29,6 +29,9 @@ try {
     } elseif ($Command -eq 'update') {
         if([string]::IsNullOrWhiteSpace($Owner)){$Owner='siny-dev'};if([string]::IsNullOrWhiteSpace($Repository)){$Repository='auto-update'}
         $result = Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture
+    } elseif ($Command -eq 'register') {
+        if([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($Repository)){throw 'Owner and Repository are required for registration.'}
+        $result = Register-AuApplication -StateRoot $StateRoot -AppId $AppId -Owner $Owner -Repository $Repository -Architecture $Architecture
     } else {
         $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
