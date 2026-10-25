@@ -26,6 +26,13 @@ try{
     Assert ((Compare-AuPackageCandidates $latest.Manifest $remoteOlder) -eq 'local') 'newer local package did not win'
     $remoteNewer=New-Package (Join-Path $testRoot 'remote-newer') '1.0.3' 'github-2'
     Assert ((Compare-AuPackageCandidates $latest.Manifest $remoteNewer) -eq 'github') 'newer GitHub package did not win'
+    $syncedRoot=Join-Path $testRoot 'synced-outbox'
+    [void](Save-AuPackageToLocal -PackageRoot $latest.Path -LocalPackageRoot $syncedRoot -Manifest $latest.Manifest -AppId demo -Architecture x64)
+    $synced=Get-AuLatestLocalPackage -PackageRoot $syncedRoot -AppId demo -Architecture x64
+    Assert ($synced.Manifest.version -eq '1.0.2') 'remote package was not saved into local outbox'
+    $syncConflict=$false
+    try{$conflictManifest=New-Package (Join-Path $testRoot 'sync-conflict') '1.0.2' 'different-content';Save-AuPackageToLocal -PackageRoot (Join-Path $testRoot 'sync-conflict') -LocalPackageRoot $syncedRoot -Manifest $conflictManifest -AppId demo -Architecture x64|Out-Null}catch{$syncConflict=$true}
+    Assert $syncConflict 'same-version local outbox content conflict was overwritten'
     $same=New-Package (Join-Path $testRoot 'same') '1.0.2' 'local-2'
     Assert ((Compare-AuPackageCandidates $latest.Manifest $same) -eq 'same') 'identical same-version packages were not recognized'
     $conflicting=New-Package (Join-Path $testRoot 'conflicting') '1.0.2' 'other-content'

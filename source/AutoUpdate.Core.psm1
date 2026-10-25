@@ -184,7 +184,8 @@ function Install-AuLatestRelease {
         [Parameter(Mandatory=$true)][string]$AppId,
         [Parameter(Mandatory=$true)][string]$StateRoot,
         [Parameter(Mandatory=$true)][string]$Architecture,
-        [psobject]$Candidate
+        [psobject]$Candidate,
+        [string]$LocalPackageRoot
     )
     if ($Owner -notmatch '^[A-Za-z0-9-]+$' -or $Repository -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid GitHub repository identity.' }
     $token=$null
@@ -219,6 +220,7 @@ function Install-AuLatestRelease {
     $payloadRoot=Join-Path $downloadRoot 'payload';[void][IO.Directory]::CreateDirectory($payloadRoot)
     try {
         [IO.File]::WriteAllBytes((Join-Path $downloadRoot 'manifest.json'),$manifestBytes)
+        [IO.File]::WriteAllBytes((Join-Path $downloadRoot 'autoupdate-manifest.json'),$manifestBytes)
         foreach($entry in $manifest.files){
             $assetName=[string]$entry.asset
             if(-not $assetName -or -not $assetMap.ContainsKey($assetName)){throw "Release asset is missing: $assetName"}
@@ -229,7 +231,10 @@ function Install-AuLatestRelease {
             [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
             Invoke-AuGitHubGet -Uri $apiUri -Token $token -Accept 'application/octet-stream' -OutFile $destination -MaximumBytes ([long]$entry.size) | Out-Null
         }
-        Install-AuPackage -PackageRoot $downloadRoot -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
+        Test-AuPackagePayload -PackageRoot $downloadRoot -Manifest $manifest -AppId $AppId -Architecture $Architecture|Out-Null
+        $installRoot=$downloadRoot
+        if($LocalPackageRoot){$installRoot=Save-AuPackageToLocal -PackageRoot $downloadRoot -LocalPackageRoot $LocalPackageRoot -Manifest $manifest -AppId $AppId -Architecture $Architecture}
+        Install-AuPackage -PackageRoot $installRoot -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
     } finally {
         if(Test-Path -LiteralPath $downloadRoot){Remove-Item -LiteralPath $downloadRoot -Recurse -Force}
         $token=$null
@@ -275,6 +280,85 @@ function Get-AuLatestReleaseManifest {
     }finally{$token=$null}
 }
 
+function Invoke-AuGitHubApiJson {
+    [CmdletBinding()]
+    param([ValidateSet('GET','POST','PATCH','DELETE')][string]$Method,[Parameter(Mandatory=$true)][uri]$Uri,[Parameter(Mandatory=$true)][string]$Token,$Body)
+    if($Uri.Scheme -cne 'https' -or $Uri.Host -cne 'api.github.com'){throw 'GitHub API request must use api.github.com over HTTPS.'}
+    $request=[Net.HttpWebRequest]::Create($Uri);$request.Method=$Method;$request.AllowAutoRedirect=$false
+    $request.UserAgent='Siny-AutoUpdate/0.1';$request.Accept='application/vnd.github+json';$request.ContentType='application/json; charset=utf-8';$request.Timeout=20000;$request.ReadWriteTimeout=30000
+    $request.Headers['Authorization']='Bearer '+$Token;$request.Headers['X-GitHub-Api-Version']='2022-11-28'
+    if($null -ne $Body){$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Body|ConvertTo-Json -Depth 16 -Compress));$request.ContentLength=$bytes.Length;$stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()}}
+    try{$response=[Net.HttpWebResponse]$request.GetResponse()}
+    catch [Net.WebException]{if($_.Exception.Response){$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub API request failed before receiving a response.'}}
+    try{
+        $status=[int]$response.StatusCode
+        if($Method -eq 'DELETE' -and $status -eq 204){return $null}
+        if($status -lt 200 -or $status -ge 300){throw "GitHub API returned HTTP $status."}
+        $reader=[IO.StreamReader]::new($response.GetResponseStream());try{$json=$reader.ReadToEnd()}finally{$reader.Dispose()}
+        if([string]::IsNullOrWhiteSpace($json)){return $null}
+        return ($json|ConvertFrom-Json)
+    }finally{$response.Dispose()}
+}
+
+function Send-AuGitHubReleaseAsset {
+    param([Parameter(Mandatory=$true)][uri]$UploadUri,[Parameter(Mandatory=$true)][string]$Token,[Parameter(Mandatory=$true)][string]$Name,[Parameter(Mandatory=$true)][string]$Path)
+    if($UploadUri.Scheme -cne 'https' -or $UploadUri.Host -cne 'uploads.github.com'){throw 'GitHub asset upload URL is not trusted.'}
+    if($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'){throw 'Release asset name is invalid.'}
+    $separator=if($UploadUri.Query){'&'}else{'?'};$uri=[uri]($UploadUri.AbsoluteUri+$separator+'name='+[uri]::EscapeDataString($Name))
+    $info=Get-Item -LiteralPath $Path;if($info.Length -gt 268435456){throw 'Release asset exceeds 256 MiB.'}
+    $request=[Net.HttpWebRequest]::Create($uri);$request.Method='POST';$request.AllowAutoRedirect=$false;$request.UserAgent='Siny-AutoUpdate/0.1';$request.Accept='application/vnd.github+json';$request.ContentType='application/octet-stream';$request.ContentLength=$info.Length;$request.Timeout=30000;$request.ReadWriteTimeout=60000
+    $request.Headers['Authorization']='Bearer '+$Token;$request.Headers['X-GitHub-Api-Version']='2022-11-28'
+    $input=[IO.File]::OpenRead($Path);$output=$request.GetRequestStream();try{$input.CopyTo($output)}finally{$input.Dispose();$output.Dispose()}
+    try{$response=[Net.HttpWebResponse]$request.GetResponse()}
+    catch [Net.WebException]{if($_.Exception.Response){$response=[Net.HttpWebResponse]$_.Exception.Response}else{throw 'GitHub asset upload failed before receiving a response.'}}
+    try{
+        if([int]$response.StatusCode -notin @(200,201)){throw "GitHub asset upload returned HTTP $([int]$response.StatusCode)."}
+        $reader=[IO.StreamReader]::new($response.GetResponseStream());try{$asset=$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
+        if($asset.name -cne $Name -or [long]$asset.size -ne [long]$info.Length){throw 'GitHub uploaded asset metadata does not match the local file.'}
+        return $asset
+    }finally{$response.Dispose()}
+}
+
+function Publish-AuLocalPackage {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$Owner,[Parameter(Mandatory=$true)][string]$Repository,[Parameter(Mandatory=$true)][string]$AppId,[Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$Architecture)
+    if($Owner -notmatch '^[A-Za-z0-9-]+$' -or $Repository -notmatch '^[A-Za-z0-9._-]+$'){throw 'Invalid GitHub repository identity.'}
+    $manifestPath=Join-Path $PackageRoot 'manifest.json';if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'Local package manifest is missing.'}
+    $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+    Test-AuPackagePayload -PackageRoot $PackageRoot -Manifest $manifest -AppId $AppId -Architecture $Architecture|Out-Null
+    $token=Get-AuCredentialToken;$base="https://api.github.com/repos/$Owner/$Repository/releases";$tag='v'+[string]$manifest.version;$existing=$null;$draft=$null
+    try{
+        try{$existing=Invoke-AuGitHubApiJson -Method GET -Uri ([uri]($base+'/tags/'+[uri]::EscapeDataString($tag))) -Token $token}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+        if($existing){
+            $publishedManifestAsset=@($existing.assets|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
+            if($publishedManifestAsset.Count -eq 1){
+                $manifestBytes=Invoke-AuGitHubGet -Uri ([uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($publishedManifestAsset[0].id)") -Token $token -Accept 'application/octet-stream' -MaximumBytes 1048576
+                $publishedManifest=[Text.Encoding]::UTF8.GetString($manifestBytes)|ConvertFrom-Json
+                if((Get-AuManifestFingerprint $publishedManifest) -ceq (Get-AuManifestFingerprint $manifest)){return [pscustomobject]@{Status='already-published';AppId=$AppId;Version=[string]$manifest.version;ReleaseUrl=$existing.html_url}}
+            }
+            return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$manifest.version;ReleaseUrl=$existing.html_url;Message='A GitHub release already uses this version with different contents; local and remote packages were preserved.'}
+        }
+        $latest=$null
+        try{$latest=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+        if($latest -and [version]$latest.Manifest.version -gt [version]$manifest.version){return [pscustomobject]@{Status='remote-newer';AppId=$AppId;Version=[string]$latest.Manifest.version;Message='GitHub already has a newer package; the local package was not published.'}}
+        $draft=Invoke-AuGitHubApiJson -Method POST -Uri ([uri]$base) -Token $token -Body ([ordered]@{tag_name=$tag;name="$AppId $($manifest.version)";body='Published by the shared AutoUpdate engine after local manifest and payload verification.';draft=$true;prerelease=$false;make_latest='false'})
+        $assets=Get-AuReleaseUploadPlan -PackageRoot $PackageRoot -Manifest $manifest
+        $uploadUri=[uri]([string]$draft.upload_url -replace '\{\?name,label\}$','')
+        foreach($asset in $assets){[void](Send-AuGitHubReleaseAsset -UploadUri $uploadUri -Token $token -Name $asset.Name -Path $asset.Path)}
+        $remoteManifestAsset=@((Invoke-AuGitHubApiJson -Method GET -Uri ([uri]($base+'/'+$draft.id+'/assets')) -Token $token)|Where-Object{$_.name -ceq 'autoupdate-manifest.json'})
+        if($remoteManifestAsset.Count -ne 1){throw 'Draft release manifest asset verification failed.'}
+        $remoteBytes=Invoke-AuGitHubGet -Uri ([uri]"https://api.github.com/repos/$Owner/$Repository/releases/assets/$($remoteManifestAsset[0].id)") -Token $token -Accept 'application/octet-stream' -MaximumBytes 1048576
+        $remoteManifest=[Text.Encoding]::UTF8.GetString($remoteBytes)|ConvertFrom-Json
+        if((Get-AuManifestFingerprint $remoteManifest) -cne (Get-AuManifestFingerprint $manifest)){throw 'Published draft manifest differs from the verified local package.'}
+        $published=Invoke-AuGitHubApiJson -Method PATCH -Uri ([uri]($base+'/'+$draft.id)) -Token $token -Body ([ordered]@{draft=$false})
+        $draft=$null
+        return [pscustomobject]@{Status='published';AppId=$AppId;Version=[string]$manifest.version;ReleaseUrl=$published.html_url;Message='Verified local package was published as a stable GitHub release.'}
+    }catch{
+        if($draft){try{Invoke-AuGitHubApiJson -Method DELETE -Uri ([uri]($base+'/'+$draft.id)) -Token $token|Out-Null}catch{}}
+        throw
+    }finally{$token=$null}
+}
+
 function Test-AuPackagePayload {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)]$Manifest,[Parameter(Mandatory=$true)][string]$AppId,[Parameter(Mandatory=$true)][string]$Architecture)
@@ -289,6 +373,53 @@ function Test-AuPackagePayload {
         if((Get-AuFileSha256 $sourcePath) -cne ([string]$entry.sha256).ToLowerInvariant()){throw "Package hash mismatch: $($entry.path)"}
     }
     return $true
+}
+
+function Save-AuPackageToLocal {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$LocalPackageRoot,[Parameter(Mandatory=$true)]$Manifest,[Parameter(Mandatory=$true)][string]$AppId,[Parameter(Mandatory=$true)][string]$Architecture)
+    Test-AuPackagePayload -PackageRoot $PackageRoot -Manifest $Manifest -AppId $AppId -Architecture $Architecture|Out-Null
+    $root=[IO.Path]::GetFullPath($LocalPackageRoot);[void][IO.Directory]::CreateDirectory($root)
+    $target=Get-AuContainedPath $root ([string]$Manifest.version)
+    if(Test-Path -LiteralPath $target){
+        $existing=Get-Content -Raw -LiteralPath (Join-Path $target 'manifest.json')|ConvertFrom-Json
+        if((Get-AuManifestFingerprint $existing) -cne (Get-AuManifestFingerprint $Manifest)){throw 'A local package already uses this version with different contents; both copies were preserved.'}
+        return $target
+    }
+    $stage=Get-AuContainedPath $root ('.stage-'+[guid]::NewGuid().ToString('N'));[void][IO.Directory]::CreateDirectory($stage)
+    try{
+        $manifestBytes=[Text.UTF8Encoding]::new($false).GetBytes(($Manifest|ConvertTo-Json -Depth 16))
+        [IO.File]::WriteAllBytes((Join-Path $stage 'manifest.json'),$manifestBytes)
+        [IO.File]::WriteAllBytes((Join-Path $stage 'autoupdate-manifest.json'),$manifestBytes)
+        $payloadRoot=Join-Path $stage 'payload';[void][IO.Directory]::CreateDirectory($payloadRoot)
+        foreach($entry in $Manifest.files){
+            $source=Get-AuContainedPath $PackageRoot ([string]$entry.source);$destination=Get-AuContainedPath $payloadRoot ([string]$entry.path)
+            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination));[IO.File]::Copy($source,$destination,$false)
+        }
+        $staged=Get-Content -Raw -LiteralPath (Join-Path $stage 'manifest.json')|ConvertFrom-Json
+        Test-AuPackagePayload -PackageRoot $stage -Manifest $staged -AppId $AppId -Architecture $Architecture|Out-Null
+        [IO.Directory]::Move($stage,$target)
+        return $target
+    }catch{
+        if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue}
+        throw
+    }
+}
+
+function Get-AuReleaseUploadPlan {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)]$Manifest)
+    $root=[IO.Path]::GetFullPath($PackageRoot);$manifestFile=Join-Path $root 'autoupdate-manifest.json'
+    if(-not (Test-Path -LiteralPath $manifestFile -PathType Leaf)){throw 'Release manifest asset is missing.'}
+    $assets=@([pscustomobject]@{Name='autoupdate-manifest.json';Path=$manifestFile})
+    foreach($entry in $Manifest.files){
+        if([string]$entry.asset -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'){throw 'Package contains an invalid release asset name.'}
+        $assetPath=Get-AuContainedPath $root ([string]$entry.source)
+        if(-not (Test-Path -LiteralPath $assetPath -PathType Leaf)){throw "Release payload asset is missing: $($entry.path)"}
+        $assets+= [pscustomobject]@{Name=[string]$entry.asset;Path=$assetPath}
+    }
+    $names=@($assets|ForEach-Object{$_.Name});if(@($names|Select-Object -Unique).Count -ne $names.Count){throw 'Package contains duplicate release asset names.'}
+    return $assets
 }
 
 function Get-AuLatestLocalPackage {
@@ -319,14 +450,14 @@ function Install-AuLatestAvailable {
         [Parameter(Mandatory=$true)][string]$Architecture,[Parameter(Mandatory=$true)][string]$LocalPackageRoot
     )
     $local=Get-AuLatestLocalPackage -PackageRoot $LocalPackageRoot -AppId $AppId -Architecture $Architecture
-    if(-not $local){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture}
+    if(-not $local){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -LocalPackageRoot $LocalPackageRoot}
     $remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture
     $winner=Compare-AuPackageCandidates -LocalManifest $local.Manifest -RemoteManifest $remote.Manifest
     if($winner -eq 'conflict'){return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$local.Manifest.version;Path=$null;Mode=$null;Message='Local and GitHub packages have the same version but different contents; both were preserved.'}}
     $selectedVersion=if($winner -eq 'github'){[string]$remote.Manifest.version}else{[string]$local.Manifest.version}
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if($current -and [version]$current.Version -gt [version]$selectedVersion){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode}}
-    if($winner -eq 'github'){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote}
+    if($winner -eq 'github'){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote -LocalPackageRoot $LocalPackageRoot}
     if($current -and $current.Version -eq $selectedVersion){
         $installedManifest=Get-Content -Raw -LiteralPath (Join-Path $current.Path 'manifest.json')|ConvertFrom-Json
         if((Get-AuManifestFingerprint $installedManifest) -ceq (Get-AuManifestFingerprint $local.Manifest)){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$selectedVersion;Path=$current.Path;Mode=[string]$local.Manifest.mode}}
@@ -436,4 +567,4 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication

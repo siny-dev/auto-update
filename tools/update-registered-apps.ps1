@@ -25,7 +25,7 @@ function Resolve-EngineModule{
     if($entry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $versionRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $entry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage')
+    $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal')
     foreach($required in $requiredFunctions){if(-not (Select-String -LiteralPath $candidate -SimpleMatch $required -Quiet)){return $sourceModule}}
     return $candidate
 }
@@ -42,8 +42,18 @@ function Invoke-UpdateCycle{
             Register-AuApplication -StateRoot $StateRoot -AppId 'AutoUpdate' -Owner $Owner -Repository $Repository -Architecture 'any'|Out-Null
         }
         foreach($app in (Get-AuRegisteredApps -StateRoot $StateRoot)){
+            $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
+            $localPackage=Get-AuLatestLocalPackage -PackageRoot $localPackageRoot -AppId $app.app_id -Architecture $app.architecture
+            if($localPackage){
+                try{
+                    $publish=Publish-AuLocalPackage -Owner $app.owner -Repository $app.repository -AppId $app.app_id -PackageRoot $localPackage.Path -Architecture $app.architecture
+                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$publish.Status;Version=$publish.Version;Message=$publish.Message})
+                }catch{
+                    $publishMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
+                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='publish-failed';Version=$localPackage.Manifest.version;Message=$publishMessage})
+                }
+            }
             try{
-                $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
                 $result=Install-AuLatestAvailable -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture -LocalPackageRoot $localPackageRoot
                 $message=if($result.Message){[string]$result.Message}else{'Local and GitHub package check completed'}
                 Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$result.Status;Version=$result.Version;Message=$message})
