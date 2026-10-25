@@ -22,7 +22,9 @@ try{
     $migrated=Invoke-Build $null;Assert ($migrated.status -eq 'unchanged' -and $migrated.version -eq '2.0.1') 'existing matching package was rebuilt when build state was absent'
     Remove-Item -LiteralPath (Join-Path $packageRoot '2.0.1') -Recurse -Force
     $recovered=Invoke-Build '2.0.0';Assert ($recovered.status -eq 'built' -and $recovered.version -eq '2.0.2') 'missing last package was incorrectly treated as unchanged'
-    'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, and rebuilds after package loss'
+    $remoteAhead=Invoke-Build '3.0.0';Assert ($remoteAhead.status -eq 'built' -and $remoteAhead.version -eq '3.0.1') 'unchanged local source did not rebuild above a newer remote package'
+    $sameRemote=Invoke-Build '3.0.0';Assert ($sameRemote.status -eq 'unchanged' -and $sameRemote.version -eq '3.0.1') 'rebuilt package was not stable when the remote version remained behind'
+    'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, rebuilds after package loss, and advances unchanged local package content beyond newer remote versions'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-local-build-test-')){throw 'refusing unsafe test cleanup'}
