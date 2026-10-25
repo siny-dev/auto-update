@@ -31,8 +31,26 @@ function Resolve-PayloadFile([string]$Root,[string]$Relative){
     if(-not (Test-Path -LiteralPath $full -PathType Leaf)){throw "Build payload is missing: $Relative"}
     return $full
 }
+function Test-RecipeVersionMetadataMatches($Recipe,[string]$Root,[string]$ExpectedVersion){
+    $contract=$Recipe.version_metadata
+    if(-not $contract){return $true}
+    $path=[string]$contract.path;$field=[string]$contract.field;$prefix=[string]$contract.prefix
+    if([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($field)){throw 'version_metadata must define path and field.'}
+    $metadataPath=Resolve-PayloadFile $Root $path
+    $document=Get-Content -Raw -LiteralPath $metadataPath|ConvertFrom-Json
+    $property=$document.PSObject.Properties[$field]
+    if(-not $property){throw 'version_metadata field is missing from the payload.'}
+    $embedded=[string]$property.Value
+    if($prefix){
+        if(-not $embedded.StartsWith($prefix,[StringComparison]::Ordinal)){return $false}
+        $embedded=$embedded.Substring($prefix.Length)
+    }
+    if($embedded -notmatch '^\d+\.\d+\.\d+$'){throw 'version_metadata value must resolve to major.minor.patch.'}
+    return ([version]$embedded).Equals([version]$ExpectedVersion)
+}
 function Get-RecipeFingerprint($Recipe,[string]$Root){
     $items=@([string]$Recipe.app_id,[string]$Recipe.platform,[string]$Recipe.architecture,[string]$Recipe.mode,[string]$Recipe.minimum_engine)
+    if($Recipe.version_metadata){$items+=("version_metadata|{0}|{1}|{2}" -f [string]$Recipe.version_metadata.path,[string]$Recipe.version_metadata.field,[string]$Recipe.version_metadata.prefix)}
     foreach($file in @($Recipe.files|Sort-Object path)){
         if($file.kind -notin @('data','resource','executable','runtime')){throw 'Unsupported package file kind in build recipe.'}
         $path=Resolve-PayloadFile $Root ([string]$file.path);$info=Get-Item -LiteralPath $path;$hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -46,6 +64,7 @@ function Get-RecipeMode($Recipe){
     return 'live'
 }
 function Test-RecipeMatchesManifest($Recipe,[string]$Root,$Manifest){
+    if(-not (Test-RecipeVersionMetadataMatches $Recipe $Root ([string]$Manifest.version))){return $false}
     if($Manifest.app_id -cne $Recipe.app_id -or $Manifest.platform -cne $Recipe.platform -or $Manifest.architecture -cne $Recipe.architecture -or $Manifest.minimum_engine -cne $Recipe.minimum_engine -or $Manifest.mode -cne (Get-RecipeMode $Recipe)){return $false}
     if(@($Manifest.files).Count -ne @($Recipe.files).Count){return $false}
     foreach($entry in $Manifest.files){
@@ -100,6 +119,7 @@ foreach($versionPath in (Get-ChildItem -LiteralPath $versionRoot -Directory -Err
 }
 if($RemoteVersion){$remote=[version]$RemoteVersion;if(-not $latestVersion -or $remote -gt $latestVersion){$latestVersion=$remote}}
 if(-not $latestVersion){$packageVersion=$seed}else{$packageVersion=Get-NextPackageVersion $latestVersion}
+if(-not (Test-RecipeVersionMetadataMatches $spec $payloadRoot $packageVersion)){throw ('Embedded version metadata does not match package version '+$packageVersion+'.')}
 if($spec.PSObject.Properties['version']){$spec.version=$packageVersion}else{$spec|Add-Member -NotePropertyName version -NotePropertyValue $packageVersion}
 $tempRoot=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-local-build-'+[guid]::NewGuid().ToString('N'));$tempOutput=Join-Path $tempRoot 'package';$tempSpec=Join-Path $tempRoot 'build.json';[void][IO.Directory]::CreateDirectory($tempRoot)
 $preserveOutput=$false
