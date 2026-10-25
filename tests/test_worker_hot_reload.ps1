@@ -7,6 +7,8 @@ $trace=Join-Path $temp 'module-trace.txt';$newModulePath=Join-Path $temp 'new-en
 [void][IO.Directory]::CreateDirectory((Join-Path $state 'logs'))
 $worker=Join-Path $tools 'update-registered-apps.ps1'
 $workerSource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\tools\update-registered-apps.ps1'))
+$policyReader=Join-Path $PSScriptRoot '..\tools\read-update-policy.ps1'
+Copy-Item -LiteralPath $policyReader -Destination (Join-Path $tools 'read-update-policy.ps1')
 $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Local\AuWorkerHotReloadTestWorker').Replace('Local\AutoUpdateRegisteredApps','Local\AuWorkerHotReloadTestCycle')
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
@@ -79,6 +81,7 @@ try{
         Write-Output 'PASS registered-app worker schedules 10-minute checks from cycle start, without adding processing time.'
     }finally{if(-not $cadenceProcess.HasExited){Stop-Process -Id $cadenceProcess.Id -Force -ErrorAction SilentlyContinue};Remove-Item Env:AU_WORKER_TEST_DELAY_MS -ErrorAction SilentlyContinue}
     $handoffRoot=Join-Path $temp 'handoff';$handoffTools=Join-Path $handoffRoot 'tools';[void][IO.Directory]::CreateDirectory($handoffTools)
+    Copy-Item -LiteralPath $policyReader -Destination (Join-Path $handoffTools 'read-update-policy.ps1')
     $handoffWorker=Join-Path $handoffTools 'update-registered-apps.ps1';$marker=Join-Path $temp 'runner-restart-requested.txt'
     $handoffSource=$workerSource.Replace('Start-Sleep -Milliseconds $waitMilliseconds','Start-Sleep -Milliseconds 500')
     $startLine='        Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null'

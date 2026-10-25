@@ -34,6 +34,7 @@ try{
  foreach($d in @('source','contracts','packages','channels','tools','tests','logs','state')){[void][IO.Directory]::CreateDirectory((Join-Path $local $d))}
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/sync.ps1') -Destination (Join-Path $local 'tools/sync.ps1')
  Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/credential-helper.ps1') -Destination (Join-Path $local 'tools/credential-helper.ps1')
+ Copy-Item -LiteralPath (Join-Path $sourceRoot 'tools/read-update-policy.ps1') -Destination (Join-Path $local 'tools/read-update-policy.ps1')
  [IO.File]::WriteAllText((Join-Path $local 'source/local.txt'),'local')
  . (Join-Path $local 'tools/sync.ps1') -Once -AllowFileRemote -MutexName $testMutexName
 $syncCode=$global:AutoUpdateSyncLastExit;Check ($syncCode -eq 0) ('local-ahead push failed exit='+$syncCode)
