@@ -36,14 +36,16 @@ function Invoke-UpdateCycle{
     try{
         try{$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
         if(-not $owned){return}
-        $registry=Join-Path $StateRoot 'registry/apps.json'
-        if(-not (Test-Path -LiteralPath $registry)){
+        $registered=@(Get-AuRegisteredApps -StateRoot $StateRoot)
+        if(-not @($registered|Where-Object{$_.app_id -ceq 'AutoUpdate'}).Count){
             Register-AuApplication -StateRoot $StateRoot -AppId 'AutoUpdate' -Owner $Owner -Repository $Repository -Architecture 'any'|Out-Null
         }
         foreach($app in (Get-AuRegisteredApps -StateRoot $StateRoot)){
             try{
-                $result=Install-AuLatestRelease -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture
-                Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$result.Status;Version=$result.Version;Message='Update check completed'})
+                $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
+                $result=Install-AuLatestAvailable -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture -LocalPackageRoot $localPackageRoot
+                $message=if($result.Message){[string]$result.Message}else{'Local and GitHub package check completed'}
+                Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$result.Status;Version=$result.Version;Message=$message})
             }catch{
                 $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
                 Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='failed';Version=$null;Message=$message})
