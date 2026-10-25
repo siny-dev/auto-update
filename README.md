@@ -59,7 +59,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - **5600G의 앱 상태:** 등록 앱 5개는 `AutoUpdate`, `BASE-001`, `github-auto-maker`, `re-sleeving`, `workboard`입니다. 2026-10-26 01:38 KST 주기에서 AutoUpdate가 `0.1.1806`으로 자기 업데이트 후 같은 주기의 나머지 네 앱(`BASE-001`, `github-auto-maker`, `re-sleeving`, `workboard`)을 모두 `already-current`로 확인했습니다. 전체 5개 등록 앱이 정상 처리됐습니다.
 - **공용 모듈:** `AutoUpdate` 모듈 `1.0.1`이 공유폴더 `outbox/modules`에 불변 버전으로 게시돼 있습니다. `app-base`, `github-auto-maker`, `re-sleeving`, `workboard`의 매니페스트가 API 1 의존성을 선언합니다. 5600G에서 네 매니페스트를 각각 resolve해 모두 `1.0.1`, `verified=true`를 확인했고 같은 PC 캐시를 재사용했습니다.
 - **검증:** 2026-10-26에 `tools/test-all.ps1`의 18개 테스트가 모두 통과했습니다. 두 앱 ID와 두 PC 캐시가 하나의 모듈 게시에서 새 호환 버전을 받고 이전 버전을 보존하는 fan-out 회귀시험도 포함합니다.
-- **H255 교차검증:** H255에는 `AutoUpdate`와 `re-sleeving`이 등록돼 있지만, 5600G에서 확인 가능한 최신 H255 로그(2026-10-26 01:34:46 KST)에서도 두 앱의 GitHub 빌드·게시·설치가 `Missing Windows credential target AutoUpdate/github`로 실패했습니다. H255의 설치 포인터는 엔진 상태 파일이 없고 모듈은 아직 `1.0.0`입니다. 토큰은 읽거나 옮기지 않았습니다. H255의 Credential Manager에 이 자격 증명이 등록된 뒤 다음 업데이트 주기를 확인해야 합니다.
+- **H255 교차검증:** H255에는 `AutoUpdate`와 `re-sleeving`이 등록돼 있지만, 5600G에서 확인 가능한 최신 H255 로그(2026-10-26 01:54:46 KST)에서도 두 앱의 GitHub 빌드·게시·설치가 `Missing Windows credential target AutoUpdate/github`로 실패했습니다. H255의 설치 포인터는 엔진 상태 파일이 없고 모듈은 아직 `1.0.0`입니다. 토큰은 읽거나 옮기지 않았습니다. H255의 Credential Manager에 이 자격 증명이 등록된 뒤 다음 업데이트 주기를 확인해야 합니다.
 - **모듈 배포 범위:** 현재 모듈은 로컬 공유폴더 파일럿이며 GitHub 모듈 게시·다운로드는 연결하지 않았습니다. 새 모듈 포인터가 올라오면 앱은 업데이트 확인 시 resolver를 호출해 PC 공용 캐시에서 검증된 버전을 받습니다. 이미 실행 중인 코드는 자동으로 메모리에서 바뀌지 않으므로 앱의 안전 재로딩 계약이나 상태 저장·복원 재시작 연결이 필요합니다.
 - **남은 검증:** H255에 자격 증명을 등록한 뒤 두 PC 모두에서 최신 엔진·앱 상태를 재확인하고, 실제 프로그램 화면에서 앱별 live 적용 또는 상태 복원 재시작을 확인합니다. 현재 확인은 테스트와 모듈 resolver 수준이며 실제 화면 적용 검증과 H255 GitHub 업데이트는 완료되지 않았습니다.
 
