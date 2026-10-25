@@ -98,12 +98,15 @@ try{
     try{$workerOwned=$workerMutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$workerOwned=$true}
     if(-not $workerOwned){exit 0}
     do{
+        $cycleTimer=[Diagnostics.Stopwatch]::StartNew()
         try{Invoke-UpdateCycle}catch{
             $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
             Write-UpdateLog ([pscustomobject]@{AppId=$null;Status='failed';Version=$null;Message=$message})
         }
         if(-not $Once){
-            Start-Sleep -Seconds ($IntervalMinutes*60)
+            $cycleTimer.Stop()
+            $waitMilliseconds=[Math]::Max(0,[int][Math]::Ceiling(($IntervalMinutes*60000)-$cycleTimer.Elapsed.TotalMilliseconds))
+            if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}
             try{if((Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash -cne $runnerHash){$restartForSourceChange=$true;break}}
             catch{Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='runner-hash-check-failed';Version=$null;Message='Could not check the shared worker file; it will retry after the next interval.'})}
         }

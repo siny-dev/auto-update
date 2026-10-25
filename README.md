@@ -20,7 +20,7 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
 - `tools/autoupdate.ps1`: 설치·상태 조회·앱 등록 및 앱 연결용 JSON resolve 명령줄 진입점. `tools/restart-apply.ps1`은 예외 재시작 때 저장된 상태를 전달하고 실행 파일을 교체한 뒤, 새 앱의 복원 확인 전이면 이전 실행본으로 롤백한다. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. AutoUpdate 자체 v0.1.1402는 세 공용 런타임 파일로 자동 게시·설치됐고, 설치본 도우미의 성공·롤백 시험을 통과했다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
-- `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분마다 수행하는 공용 작업자. AutoUpdate 자체가 새 패키지를 받으면 같은 주기 안에서 새 코어 모듈을 다시 불러온 뒤 나머지 등록 앱을 처리한다. 작업자 스크립트 자체가 공유 폴더에서 바뀌면 다음 확인 주기 뒤 숨김으로 새 프로세스를 이어 실행한다.
+- `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분 시작 간격으로 수행하는 공용 작업자. 각 주기 처리시간을 빼서 시작 간격 누적 지연을 막는다. AutoUpdate 자체가 새 패키지를 받으면 같은 주기 안에서 새 코어 모듈을 다시 불러온 뒤 나머지 등록 앱을 처리한다. 작업자 스크립트 자체가 공유 폴더에서 바뀌면 다음 확인 주기 뒤 숨김으로 새 프로세스를 이어 실행한다.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 선언된 파일이 바뀌거나 원격보다 로컬 패키지 버전이 낮으면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
 - `outbox/apps/<AppId>/build.json`: 앱별 1회 빌드 연결 설정. AutoUpdate 자체도 `outbox/apps/AutoUpdate/build.json`으로 `source/AutoUpdate.Core.psm1`, `tools/autoupdate.ps1`, `tools/restart-apply.ps1` 변경을 감지해 공통 엔진·앱 연결 CLI·재시작 도우미를 함께 패키징한다. 빌드 산출물은 C: 임시 폴더에서 공유폴더로 원자 이동할 수 없으므로 대상 볼륨에 임시 복사한 뒤 같은 볼륨에서 이름을 확정한다.
 - `outbox/apps/<AppId>/<version>/`: 각 앱의 로컬 빌드 패키지 후보. 새 버전 폴더는 불변으로 두며 로컬 확인 시 GitHub의 최신 릴리스와 함께 비교한다. 이 경로는 공유폴더에만 두고 Git 동기화 대상에서는 제외한다.

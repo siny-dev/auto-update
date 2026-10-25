@@ -31,6 +31,7 @@ function Install-AuLatestAvailable {
         [IO.File]::WriteAllText((Join-Path $versionRoot 'manifest.json'),($manifest|ConvertTo-Json -Depth 6))
         [IO.File]::WriteAllText((Join-Path $StateRoot 'apps\AutoUpdate\current.json'),('{"schema":1,"app_id":"AutoUpdate","version":"0.1.2"}'))
     }
+    if($env:AU_WORKER_TEST_DELAY_MS){Start-Sleep -Milliseconds ([int]$env:AU_WORKER_TEST_DELAY_MS)}
     [IO.File]::AppendAllText($env:AU_WORKER_TEST_TRACE,($script:EngineLabel+':'+$AppId+[char]10))
     [pscustomobject]@{Status='already-current';Version='1.0.0';Message='test'}
 }
@@ -44,7 +45,7 @@ $oldPath=Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source\AutoUpdate.Core
 $oldSha=(Get-FileHash -LiteralPath $oldPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\manifest.json'),(@{files=@(@{kind='runtime';path='source/AutoUpdate.Core.psm1';sha256=$oldSha})}|ConvertTo-Json -Depth 6))
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\current.json'),('{"schema":1,"app_id":"AutoUpdate","version":"0.1.1"}'))
-$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER
+$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER;$previousDelay=$env:AU_WORKER_TEST_DELAY_MS;$previousWaitMarker=$env:AU_WORKER_TEST_WAIT_MARKER
 try{
     $env:AU_WORKER_TEST_STATE=$state;$env:AU_WORKER_TEST_TRACE=$trace;$env:AU_WORKER_TEST_NEW_MODULE=$newModulePath
     $shell=Join-Path $PSHOME 'pwsh.exe'
@@ -58,9 +59,23 @@ try{
     if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
     Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
 
+    $cadenceWorker=Join-Path $tools 'cadence-worker.ps1';$waitMarker=Join-Path $temp 'cycle-wait-ms.txt'
+    $cadenceSource=$workerSource.Replace('if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}','if($waitMilliseconds -gt 0){[IO.File]::WriteAllText($env:AU_WORKER_TEST_WAIT_MARKER,[string]$waitMilliseconds);exit 0}')
+    if($cadenceSource -ceq $workerSource -or $cadenceSource.Contains('Start-Sleep -Milliseconds $waitMilliseconds')){throw 'Could not isolate the worker cadence wait for testing.'}
+    [IO.File]::WriteAllText($cadenceWorker,$cadenceSource,[Text.UTF8Encoding]::new($false))
+    $env:AU_WORKER_TEST_WAIT_MARKER=$waitMarker;$env:AU_WORKER_TEST_DELAY_MS='700'
+    $cadenceArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$cadenceWorker,'-IntervalMinutes','1','-StateRoot',$state,'-Owner','sample','-Repository','engine')
+    $cadenceProcess=Start-Process -FilePath $shell -ArgumentList $cadenceArgs -WindowStyle Hidden -PassThru
+    try{
+        if(-not $cadenceProcess.WaitForExit(10000)){throw 'Cadence worker did not complete the timing check.'}
+        if($cadenceProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $waitMarker)){throw 'Cadence worker did not report its next-cycle delay.'}
+        $waitMilliseconds=[int](Get-Content -LiteralPath $waitMarker -Raw)
+        if($waitMilliseconds -le 0 -or $waitMilliseconds -ge 59000){throw "Worker cadence did not subtract the simulated update time: $waitMilliseconds ms."}
+        Write-Output 'PASS registered-app worker schedules 10-minute checks from cycle start, without adding processing time.'
+    }finally{if(-not $cadenceProcess.HasExited){Stop-Process -Id $cadenceProcess.Id -Force -ErrorAction SilentlyContinue};Remove-Item Env:AU_WORKER_TEST_DELAY_MS -ErrorAction SilentlyContinue}
     $handoffRoot=Join-Path $temp 'handoff';$handoffTools=Join-Path $handoffRoot 'tools';[void][IO.Directory]::CreateDirectory($handoffTools)
     $handoffWorker=Join-Path $handoffTools 'update-registered-apps.ps1';$marker=Join-Path $temp 'runner-restart-requested.txt'
-    $handoffSource=$workerSource.Replace('Start-Sleep -Seconds ($IntervalMinutes*60)','Start-Sleep -Milliseconds 500')
+    $handoffSource=$workerSource.Replace('Start-Sleep -Milliseconds $waitMilliseconds','Start-Sleep -Milliseconds 500')
     $startLine='        Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null'
     $handoffSource=$handoffSource.Replace($startLine,'        [IO.File]::WriteAllText($env:AU_WORKER_TEST_RESTART_MARKER,''requested'')')
     if($handoffSource -ceq $workerSource -or $handoffSource.Contains($startLine)){throw 'Could not isolate the shared-worker restart handoff for testing.'}
@@ -86,5 +101,7 @@ try{
     if($null -eq $previousTrace){Remove-Item Env:AU_WORKER_TEST_TRACE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_TRACE=$previousTrace}
     if($null -eq $previousModule){Remove-Item Env:AU_WORKER_TEST_NEW_MODULE -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_NEW_MODULE=$previousModule}
     if($null -eq $previousMarker){Remove-Item Env:AU_WORKER_TEST_RESTART_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_RESTART_MARKER=$previousMarker}
+    if($null -eq $previousDelay){Remove-Item Env:AU_WORKER_TEST_DELAY_MS -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_DELAY_MS=$previousDelay}
+    if($null -eq $previousWaitMarker){Remove-Item Env:AU_WORKER_TEST_WAIT_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_WAIT_MARKER=$previousWaitMarker}
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
