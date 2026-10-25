@@ -624,4 +624,276 @@ function Install-AuPackage {
     } finally { if($owned){$mutex.ReleaseMutex()};$mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Test-AuManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+function Test-AuModuleManifest {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)]$Manifest,[Parameter(Mandatory=$true)][string]$ExpectedModuleId)
+    if($Manifest.schema -ne 1 -or $Manifest.contract -cne 'autoupdate-module-v1'){throw 'Unsupported module manifest schema or contract.'}
+    if($ExpectedModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $Manifest.module_id -cne $ExpectedModuleId){throw 'Module identity mismatch.'}
+    if([string]$Manifest.version -notmatch '^\d+\.\d+\.\d+$'){throw 'Invalid module version.'}
+    if([string]$Manifest.api_major -notmatch '^[1-9]\d*$'){throw 'Invalid module API major version.'}
+    if([string]$Manifest.minimum_engine -notmatch '^\d+\.\d+\.\d+$'){throw 'Invalid minimum AutoUpdate version.'}
+    if(-not (Test-AuVersionAtLeast $script:AutoUpdateEngineVersion ([string]$Manifest.minimum_engine))){throw 'This module requires a newer AutoUpdate version.'}
+    if($Manifest.publisher_policy -cne 'local-share-v1'){throw 'Unrecognized local module publisher policy.'}
+    if($Manifest.activation_mode -notin @('live','restart')){throw 'Invalid module activation mode.'}
+    if($Manifest.activation_mode -eq 'live' -and $Manifest.reload_contract -notin @('stateless-v1','reload-hook-v1')){throw 'Live modules must declare a supported reload contract.'}
+    if($Manifest.files -isnot [System.Array] -or $Manifest.files.Count -lt 1){throw 'A module package must contain at least one file.'}
+    $seen=@{}
+    foreach($file in $Manifest.files){
+        foreach($field in @('path','kind','size','sha256','source')){if($null -eq $file.$field){throw \"Module manifest file entry is missing $field.\"}}
+        $relative=[string]$file.path
+        if([string]::IsNullOrWhiteSpace($relative) -or $relative -match '(^[/\\]|^[A-Za-z]:|(^|[/\\])\.\.([/\\]|$)|:|[\x00-\x1f])'){throw 'Unsafe module payload path.'}
+        $normalized=$relative.Replace('\','/').ToLowerInvariant()
+        if($seen.ContainsKey($normalized)){throw 'Duplicate module payload path.'}
+        $seen[$normalized]=$true
+        if($file.kind -notin @('data','resource','executable','runtime')){throw 'Unsupported module payload kind.'}
+        if($Manifest.activation_mode -eq 'live' -and $file.kind -in @('executable','runtime') -and $Manifest.reload_contract -notin @('stateless-v1','reload-hook-v1')){throw 'Executable live modules require an explicit reload contract.'}
+        if([long]$file.size -lt 0 -or [long]$file.size -gt 268435456){throw 'Invalid or excessive module payload size.'}
+        if([string]$file.sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Invalid module payload SHA-256.'}
+        if([string]$file.source -match '(^[/\\]|^[A-Za-z]:|(^|[/\\])\.\.([/\\]|$)|:|[\x00-\x1f])'){throw 'Unsafe module package source.'}
+    }
+    return $true
+}
+
+function Get-AuModuleManifestFromPackage {
+    param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$ModuleId)
+    $manifestPath=Get-AuContainedPath $PackageRoot 'module.json'
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'Module package manifest is missing.'}
+    $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+    Test-AuModuleManifest -Manifest $manifest -ExpectedModuleId $ModuleId|Out-Null
+    foreach($entry in $manifest.files){
+        $source=Get-AuContainedPath $PackageRoot ([string]$entry.source)
+        if(-not (Test-Path -LiteralPath $source -PathType Leaf)){throw \"Module package file is missing: $($entry.path)\"}
+        $info=Get-Item -LiteralPath $source
+        if($info.Length -ne [long]$entry.size){throw \"Module package size mismatch: $($entry.path)\"}
+        if((Get-AuFileSha256 $source) -cne ([string]$entry.sha256).ToLowerInvariant()){throw \"Module package hash mismatch: $($entry.path)\"}
+    }
+    return [pscustomobject]@{Manifest=$manifest;ManifestPath=$manifestPath;ManifestHash=(Get-AuFileSha256 $manifestPath)}
+}
+
+function Get-AuCurrentModule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId)
+    if($ModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid module identity.'}
+    $moduleRoot=Get-AuContainedPath $StateRoot \"modules/$ModuleId\"
+    $pointerPath=Join-Path $moduleRoot 'current.json'
+    if(-not (Test-Path -LiteralPath $pointerPath -PathType Leaf)){return $null}
+    $pointer=Get-Content -Raw -LiteralPath $pointerPath|ConvertFrom-Json
+    if($pointer.schema -ne 1 -or $pointer.module_id -cne $ModuleId -or [string]$pointer.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$pointer.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Module cache pointer is invalid.'}
+    $versionRoot=Get-AuContainedPath (Join-Path $moduleRoot 'versions') ([string]$pointer.version)
+    if(-not (Test-Path -LiteralPath $versionRoot -PathType Container)){throw 'Active module version directory is missing.'}
+    return [pscustomobject]@{ModuleId=$ModuleId;Version=[string]$pointer.version;Path=$versionRoot;Pointer=$pointer}
+}
+
+function Get-AuVerifiedModuleVersion {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[Parameter(Mandatory=$true)][string]$Version,[int]$ApiMajor=0)
+    if($Version -notmatch '^\d+\.\d+\.\d+$'){throw 'Invalid module version.'}
+    $versionRoot=Get-AuContainedPath (Get-AuContainedPath $StateRoot \"modules/$ModuleId/versions\") $Version
+    if(-not (Test-Path -LiteralPath $versionRoot -PathType Container)){return $null}
+    $info=Get-AuModuleManifestFromPackage -PackageRoot $versionRoot -ModuleId $ModuleId
+    if([string]$info.Manifest.version -cne $Version){throw 'Module directory version does not match its manifest.'}
+    if($ApiMajor -gt 0 -and [int]$info.Manifest.api_major -ne $ApiMajor){throw \"Cached module $ModuleId/$Version has an incompatible API major.\"}
+    return [pscustomobject]@{ModuleId=$ModuleId;Version=$Version;ApiMajor=[int]$info.Manifest.api_major;ActivationMode=[string]$info.Manifest.activation_mode;Path=$versionRoot;Manifest=$info.Manifest;ManifestHash=$info.ManifestHash;Verified=$true}
+}
+
+function Get-AuCachedModuleVersions {
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[int]$ApiMajor=0)
+    $versionsRoot=Get-AuContainedPath $StateRoot \"modules/$ModuleId/versions\"
+    if(-not (Test-Path -LiteralPath $versionsRoot -PathType Container)){return @()}
+    $available=[Collections.Generic.List[object]]::new()
+    foreach($directory in Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction SilentlyContinue){
+        if($directory.Name -notmatch '^\d+\.\d+\.\d+$'){continue}
+        try{
+            $version=Get-AuVerifiedModuleVersion -StateRoot $StateRoot -ModuleId $ModuleId -Version $directory.Name -ApiMajor $ApiMajor
+            if($version){$available.Add($version)}
+        }catch{}
+    }
+    return @($available|Sort-Object { [version]$_.Version } -Descending)
+}
+
+function Install-AuModulePackage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$PackageRoot,
+        [Parameter(Mandatory=$true)][string]$StateRoot,
+        [Parameter(Mandatory=$true)][string]$ModuleId,
+        [switch]$FailActivationForTest
+    )
+    if($ModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid module identity.'}
+    $mutex=[Threading.Mutex]::new($false,('Local\AutoUpdateModule_'+$ModuleId));$owned=$false
+    try{
+        try{$owned=$mutex.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$owned=$true}
+        if(-not $owned){throw 'Another updater is installing this module.'}
+        $package=[IO.Path]::GetFullPath($PackageRoot)
+        $packageInfo=Get-AuModuleManifestFromPackage -PackageRoot $package -ModuleId $ModuleId
+        $manifest=$packageInfo.Manifest
+        $version=[string]$manifest.version
+        $moduleRoot=Get-AuContainedPath $StateRoot \"modules/$ModuleId\"
+        $versionsRoot=Join-Path $moduleRoot 'versions';$stagingRoot=Join-Path $moduleRoot 'staging'
+        [void][IO.Directory]::CreateDirectory($versionsRoot);[void][IO.Directory]::CreateDirectory($stagingRoot)
+        $versionPath=Get-AuContainedPath $versionsRoot $version
+        if(Test-Path -LiteralPath $versionPath -PathType Container){
+            $existing=Get-AuModuleManifestFromPackage -PackageRoot $versionPath -ModuleId $ModuleId
+            if($existing.ManifestHash -cne $packageInfo.ManifestHash){return [pscustomobject]@{Status='conflict';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='This module version already exists with different contents; both source copies were preserved.'}}
+            $installed=[pscustomobject]@{Status='already-cached';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='This immutable module version is already cached.'}
+        }else{
+            $stage=Join-Path $stagingRoot ([guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($stage)
+            try{
+                foreach($entry in $manifest.files){
+                    $source=Get-AuContainedPath $package ([string]$entry.source)
+                    $destination=Get-AuContainedPath $stage ([string]$entry.path)
+                    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
+                    [IO.File]::Copy($source,$destination,$false)
+                }
+                [IO.File]::WriteAllBytes((Join-Path $stage 'module.json'),[IO.File]::ReadAllBytes($packageInfo.ManifestPath))
+                [void](Get-AuModuleManifestFromPackage -PackageRoot $stage -ModuleId $ModuleId)
+                if($FailActivationForTest){throw 'Injected module installation failure.'}
+                [IO.Directory]::Move($stage,$versionPath)
+            }catch{
+                if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force}
+                throw
+            }
+            $installed=[pscustomobject]@{Status='cached';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='Verified immutable module version was cached.'}
+        }
+        $pointerPath=Join-Path $moduleRoot 'current.json'
+        $current=Get-AuCurrentModule -StateRoot $StateRoot -ModuleId $ModuleId
+        if(-not $current -or [version]$version -gt [version]$current.Version){
+            $pointer=[ordered]@{schema=1;module_id=$ModuleId;version=$version;api_major=[int]$manifest.api_major;manifest_sha256=$packageInfo.ManifestHash;activated_utc=[DateTime]::UtcNow.ToString('o')}
+            $temporary=$pointerPath+'.'+[guid]::NewGuid().ToString('N')+'.part'
+            $previous=Join-Path $moduleRoot 'previous.json'
+            [IO.File]::WriteAllText($temporary,($pointer|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+            try{
+                if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
+                    if(Test-Path -LiteralPath $previous -PathType Leaf){Remove-Item -LiteralPath $previous -Force}
+                    [IO.File]::Replace($temporary,$pointerPath,$previous,$true)
+                }else{[IO.File]::Move($temporary,$pointerPath)}
+            }catch{
+                if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}
+                if($installed.Status -eq 'cached' -and (Test-Path -LiteralPath $versionPath)){Remove-Item -LiteralPath $versionPath -Recurse -Force}
+                throw
+            }
+            $installed.Status=if($installed.Status -eq 'already-cached'){'activated-cached'}else{'activated'}
+        }elseif([version]$version -lt [version]$current.Version){
+            $installed.Status=if($installed.Status -eq 'already-cached'){'compatible-cache-ready'}else{'cached-compatible'}
+        }
+        return $installed
+    }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
+}
+
+function Publish-AuLocalModulePackage {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$ModuleId)
+    $package=[IO.Path]::GetFullPath($PackageRoot)
+    $info=Get-AuModuleManifestFromPackage -PackageRoot $package -ModuleId $ModuleId
+    $moduleRoot=Get-AuContainedPath $ModuleSourceRoot $ModuleId
+    $versionsRoot=Join-Path $moduleRoot 'versions';$stageRoot=Join-Path $moduleRoot 'staging'
+    [void][IO.Directory]::CreateDirectory($versionsRoot);[void][IO.Directory]::CreateDirectory($stageRoot)
+    $version=[string]$info.Manifest.version
+    $target=Get-AuContainedPath $versionsRoot $version
+    $pointerPath=Join-Path $moduleRoot 'current.json'
+    $currentVersion=$null
+    if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
+        $current=Get-Content -Raw -LiteralPath $pointerPath|ConvertFrom-Json
+        if($current.schema -ne 1 -or $current.module_id -cne $ModuleId -or [string]$current.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$current.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Published module pointer is invalid.'}
+        $currentVersion=[string]$current.version
+        $currentPackage=Get-AuModuleManifestFromPackage -PackageRoot (Get-AuContainedPath $versionsRoot $currentVersion) -ModuleId $ModuleId
+        if($currentPackage.ManifestHash -cne ([string]$current.manifest_sha256).ToLowerInvariant()){throw 'Published module pointer does not match its manifest.'}
+        if([version]$currentVersion -gt [version]$version){throw 'Publishing an older module version is blocked.'}
+    }
+    if(Test-Path -LiteralPath $target -PathType Container){
+        $existing=Get-AuModuleManifestFromPackage -PackageRoot $target -ModuleId $ModuleId
+        if($existing.ManifestHash -cne $info.ManifestHash){return [pscustomobject]@{Status='conflict';ModuleId=$ModuleId;Version=$version;Path=$target;Message='This published module version already contains different content; neither copy was overwritten.'}}
+    }else{
+        $stage=Join-Path $stageRoot ([guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($stage)
+        try{
+            foreach($entry in $info.Manifest.files){
+                $source=Get-AuContainedPath $package ([string]$entry.source)
+                $destination=Get-AuContainedPath $stage ([string]$entry.source)
+                [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
+                [IO.File]::Copy($source,$destination,$false)
+            }
+            [IO.File]::WriteAllBytes((Join-Path $stage 'module.json'),[IO.File]::ReadAllBytes($info.ManifestPath))
+            [void](Get-AuModuleManifestFromPackage -PackageRoot $stage -ModuleId $ModuleId)
+            [IO.Directory]::Move($stage,$target)
+        }catch{
+            if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force}
+            throw
+        }
+    }
+    if(-not $currentVersion -or [version]$version -gt [version]$currentVersion){
+        $pointer=[ordered]@{schema=1;module_id=$ModuleId;version=$version;api_major=[int]$info.Manifest.api_major;manifest_sha256=$info.ManifestHash;published_utc=[DateTime]::UtcNow.ToString('o')}
+        $temporary=$pointerPath+'.'+[guid]::NewGuid().ToString('N')+'.part';$previous=Join-Path $moduleRoot 'previous.json'
+        [IO.File]::WriteAllText($temporary,($pointer|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+        try{
+            if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
+                if(Test-Path -LiteralPath $previous -PathType Leaf){Remove-Item -LiteralPath $previous -Force}
+                [IO.File]::Replace($temporary,$pointerPath,$previous,$true)
+            }else{[IO.File]::Move($temporary,$pointerPath)}
+        }catch{
+            if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}
+            throw
+        }
+        return [pscustomobject]@{Status='published';ModuleId=$ModuleId;Version=$version;Path=$target;Message='Immutable module version was verified and the source pointer was advanced.'}
+    }
+    return [pscustomobject]@{Status='already-published';ModuleId=$ModuleId;Version=$version;Path=$target;Message='Identical immutable module version is already published.'}
+}
+
+function Update-AuModuleFromLocalSource {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[Parameter(Mandatory=$true)][int]$ApiMajor)
+    if($ApiMajor -lt 1){throw 'Required module API major must be positive.'}
+    $moduleRoot=Get-AuContainedPath $ModuleSourceRoot $ModuleId
+    $pointerPath=Join-Path $moduleRoot 'current.json'
+    if(-not (Test-Path -LiteralPath $pointerPath -PathType Leaf)){throw \"Local module source has no current pointer: $ModuleId\"}
+    $pointer=Get-Content -Raw -LiteralPath $pointerPath|ConvertFrom-Json
+    if($pointer.schema -ne 1 -or $pointer.module_id -cne $ModuleId -or [string]$pointer.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$pointer.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Local module source pointer is invalid.'}
+    $publishedVersion=[version]$pointer.version
+    $versionsRoot=Get-AuContainedPath $moduleRoot 'versions'
+    $candidates=[Collections.Generic.List[object]]::new()
+    foreach($directory in Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction SilentlyContinue){
+        if($directory.Name -notmatch '^\d+\.\d+\.\d+$' -or [version]$directory.Name -gt $publishedVersion){continue}
+        try{
+            $info=Get-AuModuleManifestFromPackage -PackageRoot $directory.FullName -ModuleId $ModuleId
+            if($directory.Name -ceq [string]$pointer.version -and $info.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant()){throw 'Published pointer does not match current module manifest.'}
+            if([int]$info.Manifest.api_major -eq $ApiMajor){$candidates.Add([pscustomobject]@{Version=$directory.Name;Path=$directory.FullName;Manifest=$info.Manifest;ManifestHash=$info.ManifestHash})}
+        }catch{
+            if($directory.Name -ceq [string]$pointer.version){throw}
+        }
+    }
+    $candidate=@($candidates|Sort-Object { [version]$_.Version } -Descending|Select-Object -First 1)
+    if($candidate.Count -eq 0){throw \"No valid local module version supports API $ApiMajor: $ModuleId\"}
+    return Install-AuModulePackage -PackageRoot $candidate[0].Path -StateRoot $StateRoot -ModuleId $ModuleId
+}
+
+function Resolve-AuAppModules {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$AppManifestPath,[Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$StateRoot)
+    if(-not (Test-Path -LiteralPath $AppManifestPath -PathType Leaf)){throw 'App module manifest is missing.'}
+    $app=Get-Content -Raw -LiteralPath $AppManifestPath|ConvertFrom-Json
+    if($app.schema -ne 1 -or $app.contract -cne 'autoupdate-app-modules-v1' -or [string]$app.app_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Unsupported app module manifest.'}
+    if($app.modules -isnot [System.Array]){throw 'App module list must be an array.'}
+    $seen=@{};$resolved=[Collections.Generic.List[object]]::new()
+    foreach($requirement in $app.modules){
+        $moduleId=[string]$requirement.module_id;$apiMajor=[int]$requirement.api_major
+        if($moduleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $apiMajor -lt 1){throw 'App module requirement is invalid.'}
+        if($seen.ContainsKey($moduleId.ToLowerInvariant())){throw 'App module list contains a duplicate module ID.'}
+        $seen[$moduleId.ToLowerInvariant()]=$true
+        $sourceStatus='offline-cache';$sourceError=$null
+        try{
+            $update=Update-AuModuleFromLocalSource -ModuleSourceRoot $ModuleSourceRoot -StateRoot $StateRoot -ModuleId $moduleId -ApiMajor $apiMajor
+            $sourceStatus=[string]$update.Status
+        }catch{$sourceError=$_.Exception.Message}
+        $cached=@(Get-AuCachedModuleVersions -StateRoot $StateRoot -ModuleId $moduleId -ApiMajor $apiMajor)
+        if($cached.Count -eq 0){
+            if($sourceError){throw \"Required module $moduleId API $apiMajor is unavailable. $sourceError\"}
+            throw \"Required module $moduleId API $apiMajor is not cached.\"
+        }
+        $chosen=$cached[0]
+        $resolved.Add([pscustomobject]@{module_id=$moduleId;version=$chosen.Version;api_major=$chosen.ApiMajor;activation_mode=$chosen.ActivationMode;module_path=$chosen.Path;verified=$true;source_status=$sourceStatus;source_error=$sourceError})
+    }
+    return [pscustomobject]@{schema=1;status='ready';app_id=[string]$app.app_id;modules=@($resolved)}
+}
+
+Export-ModuleMember -Function Test-AuManifest,Test-AuModuleManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuModulePackage,Publish-AuLocalModulePackage,Update-AuModuleFromLocalSource,Resolve-AuAppModules,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuCurrentModule,Get-AuVerifiedModuleVersion,Get-AuCachedModuleVersions,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
