@@ -5,7 +5,16 @@ param(
 )
 $ErrorActionPreference='Stop'
 $repoRoot=Split-Path -Parent $PSScriptRoot
-Import-Module (Join-Path $repoRoot 'source\AutoUpdate.Core.psm1') -Force
+$requiredEngineFunctions=@('Compare-AuPackageCandidates','Get-AuLatestLocalPackage')
+$loadedEngine=Get-Module -Name 'AutoUpdate.Core' -ErrorAction SilentlyContinue|Select-Object -First 1
+$engineApiReady=$false
+if($loadedEngine){
+    $availableFunctions=@(Get-Command -Module $loadedEngine.Name -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)
+    $engineApiReady=@($requiredEngineFunctions|Where-Object{$_ -notin $availableFunctions}).Count -eq 0
+}
+# The background worker loads a versioned engine before calling this builder. Keep
+# that engine active; importing the checkout with -Force would replace it mid-cycle.
+if(-not $engineApiReady){Import-Module (Join-Path $repoRoot 'source\AutoUpdate.Core.psm1') -Force -Scope Local}
 $recipeFile=[IO.Path]::GetFullPath($RecipePath)
 $packageDirectory=[IO.Path]::GetFullPath($PackageRoot)
 $spec=Get-Content -Raw -LiteralPath $recipeFile|ConvertFrom-Json
