@@ -642,6 +642,7 @@ function Test-AuModuleManifest {
         foreach($field in @('path','kind','size','sha256','source')){if($null -eq $file.$field){throw \"Module manifest file entry is missing $field.\"}}
         $relative=[string]$file.path
         if([string]::IsNullOrWhiteSpace($relative) -or $relative -match '(^[/\\]|^[A-Za-z]:|(^|[/\\])\.\.([/\\]|$)|:|[\x00-\x1f])'){throw 'Unsafe module payload path.'}
+        if([string]::IsNullOrWhiteSpace([string]$file.source)){throw 'Module manifest paths cannot be empty.'}
         $normalized=$relative.Replace('\','/').ToLowerInvariant()
         if($seen.ContainsKey($normalized)){throw 'Duplicate module payload path.'}
         $seen[$normalized]=$true
@@ -801,7 +802,7 @@ function Publish-AuLocalModulePackage {
         if($current.schema -ne 1 -or $current.module_id -cne $ModuleId -or [string]$current.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$current.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Published module pointer is invalid.'}
         $currentVersion=[string]$current.version
         $currentPackage=Get-AuModuleManifestFromPackage -PackageRoot (Get-AuContainedPath $versionsRoot $currentVersion) -ModuleId $ModuleId
-        if($currentPackage.ManifestHash -cne ([string]$current.manifest_sha256).ToLowerInvariant()){throw 'Published module pointer does not match its manifest.'}
+        if($currentPackage.ManifestHash -cne ([string]$current.manifest_sha256).ToLowerInvariant() -or [string]$currentPackage.Manifest.version -cne $currentVersion -or [int]$currentPackage.Manifest.api_major -ne [int]$current.api_major){throw 'Published module pointer does not match its manifest.'}
         if([version]$currentVersion -gt [version]$version){throw 'Publishing an older module version is blocked.'}
     }
     if(Test-Path -LiteralPath $target -PathType Container){
@@ -859,7 +860,8 @@ function Update-AuModuleFromLocalSource {
         if($directory.Name -notmatch '^\d+\.\d+\.\d+$' -or [version]$directory.Name -gt $publishedVersion){continue}
         try{
             $info=Get-AuModuleManifestFromPackage -PackageRoot $directory.FullName -ModuleId $ModuleId
-            if($directory.Name -ceq [string]$pointer.version -and $info.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant()){throw 'Published pointer does not match current module manifest.'}
+            if([string]$info.Manifest.version -cne $directory.Name){throw 'Published module directory does not match its manifest version.'}
+            if($directory.Name -ceq [string]$pointer.version -and ($info.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant() -or [int]$info.Manifest.api_major -ne [int]$pointer.api_major)){throw 'Published pointer does not match current module manifest.'}
             if([int]$info.Manifest.api_major -eq $ApiMajor){$candidates.Add([pscustomobject]@{Version=$directory.Name;Path=$directory.FullName;Manifest=$info.Manifest;ManifestHash=$info.ManifestHash})}
         }catch{
             if($directory.Name -ceq [string]$pointer.version){throw}
