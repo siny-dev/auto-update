@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('install','update','status')][string]$Command,
+    [Parameter(Mandatory=$true)][ValidateSet('install','update','status','resolve')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$AppId='AutoUpdate',
@@ -32,8 +32,11 @@ try {
     } else {
         $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }
+        elseif($result.Manifest.architecture -ne 'any' -and $result.Manifest.architecture -ne $Architecture){throw 'Active package architecture does not match this application.'}
+        elseif($Command -eq 'resolve') { $result=[pscustomobject]@{schema=1;status='ready';app_id=$result.AppId;version=$result.Version;mode=$result.Mode;package_path=$result.Path;verified=$true;manifest=$result.Manifest} }
     }
     $result | ConvertTo-Json -Depth 8 -Compress
+    if($Command -eq 'resolve' -and $result.Status -eq 'not-installed'){exit 2}
     exit 0
 } catch {
     [Console]::Error.WriteLine(($_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'))

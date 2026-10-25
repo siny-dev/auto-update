@@ -495,7 +495,7 @@ function Get-AuCurrent {
 
 function Get-AuVerifiedCurrent {
     [CmdletBinding()]
-    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId)
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId,[ValidateSet('x86','x64','arm64')][string]$Architecture='x64')
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if(-not $current){return $null}
     $manifestPath=Join-Path $current.Path 'manifest.json'
@@ -503,6 +503,7 @@ function Get-AuVerifiedCurrent {
     if((Get-AuFileSha256 $manifestPath) -cne ([string]$current.Pointer.manifest_sha256).ToLowerInvariant()){throw 'Active package manifest hash is invalid.'}
     $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
     Test-AuManifest -Manifest $manifest -ExpectedAppId $AppId|Out-Null
+    if($manifest.architecture -ne 'any' -and $manifest.architecture -ne $Architecture){throw 'Active package architecture does not match this application.'}
     if([string]$manifest.version -cne $current.Version -or [string]$manifest.mode -cne $current.Mode){throw 'Active package pointer does not match its manifest.'}
     foreach($entry in $manifest.files){
         $filePath=Get-AuContainedPath $current.Path ([string]$entry.path)

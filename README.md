@@ -18,11 +18,11 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - `contracts/`: 앱 연결부와 패키지 규약.
 - `packages/`: 승인된 엔진·앱 패키지의 개발 산출물.
 - `channels/stable/`, `channels/canary/`: 채널별 배포 포인터.
-- `tools/autoupdate.ps1`: 설치·상태 조회 명령줄 진입점. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
+- `tools/autoupdate.ps1`: 설치·상태 조회 및 앱 연결용 JSON resolve 명령줄 진입점. `status`는 활성 package manifest와 모든 payload 크기·SHA-256을 다시 검증한다. 반복 확인은 릴리스 manifest만 조회하며 현재 버전이면 자산을 다시 받지 않는다.
 - `tools/sync.ps1`: AutoUpdate 소스 저장소를 커밋 그래프로 안전하게 동기화하는 별도 작업자.
 - `tools/update-registered-apps.ps1`: 등록된 프로그램과 AutoUpdate 자체의 공유폴더 로컬 패키지 게시 및 GitHub 릴리스 확인·적용을 10분마다 수행하는 공용 작업자.
 - `tools/build-local-package.ps1`: `outbox/apps/<AppId>/build.json`의 payload 명세를 읽고 소스가 바뀌면 새 패키지를 만든다. 버전은 로컬·GitHub 최신보다 높게 자동 증가한다.
-- `outbox/apps/<AppId>/build.json`: 앱별 1회 빌드 연결 설정. AutoUpdate 자체도 `AutoUpdate/build.json`으로 `source/AutoUpdate.Core.psm1` 변경을 감지해 새 패키지를 만든다. 빌드 산출물은 C: 임시 폴더에서 공유폴더로 원자 이동할 수 없으므로 대상 볼륨에 임시 복사한 뒤 같은 볼륨에서 이름을 확정한다.
+- `outbox/apps/<AppId>/build.json`: 앱별 1회 빌드 연결 설정. AutoUpdate 자체도 `outbox/apps/AutoUpdate/build.json`으로 `source/AutoUpdate.Core.psm1` 변경을 감지해 새 패키지를 만든다. 빌드 산출물은 C: 임시 폴더에서 공유폴더로 원자 이동할 수 없으므로 대상 볼륨에 임시 복사한 뒤 같은 볼륨에서 이름을 확정한다.
 - `outbox/apps/<AppId>/<version>/`: 각 앱의 로컬 빌드 패키지 후보. 새 버전 폴더는 불변으로 두며 로컬 확인 시 GitHub의 최신 릴리스와 함께 비교한다. 이 경로는 공유폴더에만 두고 Git 동기화 대상에서는 제외한다.
 - `tools/register-app.ps1`: 프로그램을 공용 업데이트 목록에 한 번 등록하는 연결 명령.
 - `tools/install-update-task.ps1`: 사용자 로그인 후 공용 업데이트 작업자를 숨김 백그라운드에서 실행하도록 등록한다.
@@ -50,13 +50,13 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 - 남음: 현재 등록된 앱은 AutoUpdate 자체뿐이다. 제작 기본툴 `app-base`에는 별도 C 업데이트 엔진과 schema 2가 있어 새 공용 엔진과 아직 연결되지 않았다. 공용 엔진을 한 번 연결한 뒤 각 앱마다 업데이트 엔진을 다시 패치하지 않도록, app-base의 최초 연결·패키지 호환·실제 live/restart 상태 훅을 통합하고 실제 생성 앱으로 검증해야 한다. 기존 앱에도 각 한 번의 연결 작업이 필요하다.
 - 완료: 각 등록 앱이 `outbox/apps/<AppId>/<version>/` 로컬 패키지 후보와 GitHub stable 릴리스를 10분마다 비교한다. 높은 버전은 로컬 또는 GitHub에서 선택하고, 같은 버전에서 payload hash가 다르면 충돌로 보류한다. 로컬 최신 패키지 선택·실제 파일 크기/SHA-256 사전 검증·설치와 후보 판정 단위시험 통과. 손상된 높은 버전 후보는 건너뛰고 다음 유효 패키지를 선택한다. 같은 버전의 설치본에서 payload가 다르면 already-current로 오인하지 않고 충돌로 보류한다.
 - 로컬 검증 완료: `build.json` 레시피에서 자동 패키지를 만들고, 변경이 없으면 건너뛰며, 바뀌면 로컬·GitHub 최신보다 높은 버전을 만든다. 로컬 패키지는 GitHub 초안 릴리스에 올린 뒤 manifest·asset 수·각 원격 파일의 크기와 SHA-256을 확인하고 공개한다. 원격 최신 패키지는 검증 후 공유 outbox에 원자 저장하고 설치한다. 버전 충돌은 보류하고 덮어쓰지 않는다. 자동 빌드·후보 선택·충돌·staging/rollback, 상태 파일 누락 시 기존 패키지 인식, 마지막 패키지 손실 후 재빌드 로컬시험 통과. CI/validation #24 통과. 실제 앱에는 아직 `build.json`이 없어 앱 릴리스 게시시험은 남아 있다.
-- 핵심 미완료: AutoUpdate 자체 `build.json`은 추가했고 v0.1.1002 로컬 패키지 빌드를 확인했다. 등록 작업자가 새 AutoUpdate 패키지를 GitHub에서 선택·설치하는 실운전 확인 완료: 로컬에서 만든 0.1.1002보다 높은 원격 0.1.1101을 선택했고, 실제 설치 후 검증 API가 정상 동작했다. 각 다른 앱에 1회 `build.json`과 앱 연결부를 추가하고 실제 앱 payload 게시를 검증해야 한다. 공용 엔진 수정의 연결 앱 전파, app-base 등 기존 프로그램 연결, 실제 UI의 live/restart 상태 보존 확인도 남았다. 이를 완료하기 전에는 “모든 프로그램 자동패치 완료”로 보지 않는다.
+- 핵심 미완료: AutoUpdate 자체 `build.json`과 언어 중립 CLI `resolve` 연결 규약을 추가했고, 실제 설치된 v0.1.1101에서 검증 API가 정상 동작했다. 로컬 AutoUpdate 빌드에서 GitHub 최신 선택·설치를 실운전 확인했다. 모든 다른 앱에 1회 `build.json`과 얇은 연결부를 추가하고, app-base 등 실제 화면의 live/restart 상태 보존을 검증해야 한다. 공용 엔진 수정의 연결 앱 전파, app-base 등 기존 프로그램 연결, 실제 UI의 live/restart 상태 보존 확인도 남았다. 이를 완료하기 전에는 “모든 프로그램 자동패치 완료”로 보지 않는다.
 
 이 작업은 공용 엔진의 자동 전파와 라이브/재시작 경계를 먼저 완성·검증한다. 기존 앱의 최초 공용 런타임 채택은 공통 연결 계약으로 처리하고, 이후 앱마다 업데이트 엔진을 다시 패치하지 않도록 한다. MA는 포함하지 않는다.
 
 ## 사용 예
 
-`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 읽는다. 앱을 등록하는 명령은 다음 형태다.
+`tools/autoupdate.ps1 -Command status -StateRoot <앱 데이터 경로> -AppId <앱 ID>`는 현재 연결된 패키지를 검증한다. 앱 연결부는 같은 CLI의 `-Command resolve`를 호출해 검증된 경로·버전·모드를 JSON으로 받는다. 앱을 등록하는 명령은 다음 형태다.
 
 `tools/register-app.ps1 -AppId Alarm -Owner siny-dev -Repository alarm -Architecture x64`
 

@@ -59,11 +59,11 @@ try {
     [IO.File]::WriteAllText((Join-Path $p6 'manifest.json'),($m|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
     $r6=Install-AuPackage -PackageRoot $p6 -StateRoot $state -AppId demo -Architecture x64
     Assert ($r6.Mode -eq 'restart') 'runtime manifest without a mode must default to restart'
-    $verified=Get-AuVerifiedCurrent -StateRoot $state -AppId demo
+    $verified=Get-AuVerifiedCurrent -StateRoot $state -AppId demo -Architecture x64
     Assert ($verified.Verified -and $verified.Version -eq '1.0.2' -and $verified.Manifest.app_id -eq 'demo') 'verified current package result is incomplete'
     $installedFile=Join-Path $verified.Path 'app.dll';$saved=[IO.File]::ReadAllBytes($installedFile)
     [IO.File]::WriteAllText($installedFile,'tampered',[Text.UTF8Encoding]::new($false))
-    $failed=$false;try{Get-AuVerifiedCurrent -StateRoot $state -AppId demo|Out-Null}catch{$failed=$true}
+    $failed=$false;try{Get-AuVerifiedCurrent -StateRoot $state -AppId demo -Architecture x64|Out-Null}catch{$failed=$true}
     Assert $failed 'corrupted active payload was returned as verified'
     [IO.File]::WriteAllBytes($installedFile,$saved)
 
