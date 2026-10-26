@@ -60,7 +60,7 @@ function Publish-AuLocalModulePackage([string]`$PackageRoot,[string]`$ModuleSour
     [IO.File]::WriteAllText((Join-Path $moduleTools 'build-module-package.ps1'),'param([string]$ModuleId,[string]$Version,[int]$ApiMajor,[string]$MinimumEngine,[string]$SourceRoot,[string]$OutputRoot,[string]$ActivationMode)',[Text.UTF8Encoding]::new($false))
     $syncResult=& (Join-Path $moduleTools 'sync-core-module.ps1') -StateRoot (Join-Path $tempRoot 'sync-state') -ModuleSourceRoot $publishedRoot | Out-String
     $afterSync=(Get-Module -Name 'AutoUpdate.Core'|Select-Object -First 1).Path
-    if($afterSync -ne $runtimeModule -or (Test-Path -LiteralPath $marker) -or ($syncResult|ConvertFrom-Json).status -ne 'published'){
+    if($afterSync -ne $runtimeModule -or (Test-Path -LiteralPath $marker) -or ($syncResult|ConvertFrom-Json).status -ne 'published' -or ($syncResult|ConvertFrom-Json).cache_status -ne 'installer-unavailable'){
         throw 'The core module sync replaced the active engine with the source module.'
     }
     Write-Output 'PASS: the core module sync preserves the engine used by the current worker cycle.'

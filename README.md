@@ -54,14 +54,14 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 ## 현재 구현 상태 (2026-10-26 확인)
 
-- **공용 업데이트 엔진:** 5600G와 H255 모두 AutoUpdate 0.1.1807을 설치했고, 현재 포인터의 manifest와 3개 payload 해시 검증이 통과했습니다. 정책은 10분입니다. 5600G는 새 버전을 안정 GitHub 릴리스로 게시한 뒤 같은 주기에서 설치하고 엔진을 hot-reload했습니다. H255는 GitHub 자격 증명이 없어 공유 로컬 패키지로 설치한 뒤 같은 방식으로 엔진을 다시 불러왔습니다.
+- **공용 업데이트 엔진:** 5600G와 H255 모두 AutoUpdate 0.1.1808을 설치했고, 양쪽 `status` 검증에서 manifest와 3개 payload 해시 검증이 통과했습니다. 5600G는 2026-10-26 09:44 UTC, H255는 09:30 UTC에 같은 패키지를 활성화했고 각 작업자는 새 엔진으로 hot-reload했습니다. 정책은 10분입니다.
 - **GitHub rate limit 처리:** 읽기 요청은 403/429 응답에서 Retry-After 또는 X-RateLimit-Reset 헤더를 따르고, 보조 제한이면 1분부터 지수형으로 최대 3회 재시도합니다. 일반 권한 오류는 지연 재시도하지 않으며, 상태를 변경하는 POST/PATCH/DELETE는 같은 주기 안에서 자동 재전송하지 않습니다.
-- **5600G의 앱 상태:** 등록 앱 5개는 AutoUpdate, BASE-001, github-auto-maker, re-sleeving, workboard입니다. 2026-10-26 02:58 KST 주기에서 AutoUpdate가 0.1.1807로 자체 업데이트·hot-reload한 뒤 새 엔진이 나머지 네 앱을 모두 already-current로 확인했습니다.
-- **공용 모듈:** AutoUpdate 모듈 1.0.2가 공유폴더 outbox/modules에 불변 버전으로 게시됐습니다. app-base, github-auto-maker, re-sleeving, workboard 매니페스트가 API 1 의존성을 선언합니다. 5600G의 BASE-001·github-auto-maker·re-sleeving과 H255의 re-sleeving resolver가 모두 1.0.2, verified=true를 반환했고 각 PC 공용 캐시를 사용합니다.
-- **검증:** 2026-10-26에 tools/test-all.ps1의 19개 테스트 스크립트가 모두 통과했습니다. 원격 조회 실패 시 로컬 fallback, 무다운그레이드, 동일 버전 내용 충돌 보존, 모듈 fan-out, 소스 변경 시 모듈 패치 버전 자동 발행·활성화, 엔진 자체 업데이트와 worker hot-reload 시험을 포함합니다.
-- **H255 교차검증:** H255에는 AutoUpdate와 re-sleeving이 등록돼 있습니다. 2026-10-26 02:54 KST 주기에서 AutoUpdate 0.1.1807을 공유 로컬 패키지로 적용하고 payload 3개 검증 및 엔진 hot-reload까지 통과했습니다. re-sleeving 1.0.30도 로컬 후보 기준 already-current입니다. H255에는 여전히 AutoUpdate/github 자격 증명이 없어 GitHub 비교·게시 로그는 실패하지만 로컬 업데이트는 정상 진행됩니다. 토큰은 읽거나 옮기지 않았습니다.
+- **5600G의 앱 상태:** 등록 앱 5개는 AutoUpdate, BASE-001, github-auto-maker, re-sleeving, workboard입니다. 2026-10-26 09:44 UTC 주기에서 AutoUpdate가 0.1.1808로 자체 업데이트·hot-reload한 뒤 새 엔진이 나머지 네 앱을 모두 already-current로 확인했습니다.
+- **공용 모듈:** AutoUpdate 1.0.5가 공유폴더에 불변 버전으로 게시됐고, 5600G와 H255 캐시 포인터 및 해시가 모두 일치합니다. Re-sleeving 의존성 resolver 시험은 양쪽 PC에서 `verified=true`, `delivery_level=L1`, `source_status=already-cached`를 반환했습니다. L1은 검증된 캐시 전달만 확인하며, 앱 메모리 로드·실제 활성화(L2/L3)는 아직 보고되지 않았습니다.
+- **검증:** 2026-10-26에 `tools/test-all.ps1`의 19개 테스트 스크립트가 모두 통과했습니다. 소스 변경 시 공유 모듈 게시와 PC 캐시 활성화, 이전 캐시 보존, 앱 fan-out, 엔진 자체 업데이트와 숨김 worker hot-reload를 포함합니다.
+- **H255 교차검증:** H255 작업자가 새 스크립트로 숨김 전환한 뒤 AutoUpdate 모듈 캐시를 1.0.5로 갱신했고, resolver와 엔진 패키지 무결성 검증이 통과했습니다. H255의 AutoUpdate 0.1.1808 릴리스 게시·설치는 성공했습니다. Re-sleeving는 별도 빌드 설정의 JSON 경로 파싱 실패와 해당 저장소 조회 HTTP 404가 기록되어 있어, 그 앱의 원격 업데이트는 이 확인에서 통과로 보지 않았습니다.
 - **모듈 배포 범위:** 현재 모듈은 로컬 공유폴더 파일럿이며 GitHub 모듈 게시·다운로드는 연결하지 않았습니다. 새 모듈 포인터가 올라오면 앱은 업데이트 확인 시 resolver를 호출해 PC 공용 캐시에서 검증된 버전을 받습니다. 이미 실행 중인 코드는 자동으로 메모리에서 바뀌지 않으므로 앱의 안전 재로딩 계약이나 상태 저장·복원 재시작 연결이 필요합니다.
-- **남은 검증:** H255에서 GitHub 최신본 비교·게시까지 하려면 해당 PC의 AutoUpdate/github 자격 증명이 필요합니다. 실제 GUI 앱별 live 적용과 설정·화면 상태 복원 재시작은 별도 앱 수용 시험이 남아 있습니다. 엔진 자체의 패키지 검증·hot-reload와 helper rollback은 자동 시험으로 확인했습니다.
+- **남은 검증:** 모든 앱의 런타임 연결과 실제 활성화는 각각 L2/L3 근거가 있어야 확인할 수 있습니다. H255 Re-sleeving의 별도 빌드 설정/저장소 오류와, GUI 앱별 live 적용·화면 상태 복원 재시작 수용 시험도 남아 있습니다. 엔진 패키지 검증·hot-reload와 helper rollback은 자동 시험으로 확인했습니다.
 
 공유 AutoUpdate 엔진과 로컬 모듈 배포 경로는 검증됐습니다. 기존 앱의 최초 공용 런타임/모듈 연결은 앱마다 한 번 필요하며, 이후 공용 모듈 변경은 연결된 앱의 다음 resolver 확인 때 새 버전으로 전달됩니다. MA는 포함하지 않습니다.
 ## 사용 예

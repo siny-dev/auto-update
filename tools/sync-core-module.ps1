@@ -32,18 +32,20 @@ if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
 $core=Join-Path $root 'source\AutoUpdate.Core.psm1'
 $requiredEngineFunctions=@('Publish-AuLocalModulePackage')
 $loadedEngine=Get-Module -Name 'AutoUpdate.Core' -ErrorAction SilentlyContinue|Select-Object -First 1
-$engineApiReady=$false
+$engineCanPublish=$false
 $engineCanInstall=$false
 if($loadedEngine){
     $availableFunctions=@(Get-Command -Module $loadedEngine.Name -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)
-    $engineApiReady=@($requiredEngineFunctions|Where-Object{$_ -notin $availableFunctions}).Count -eq 0
+    $engineCanPublish='Publish-AuLocalModulePackage' -in $availableFunctions
     $engineCanInstall='Install-AuModulePackage' -in $availableFunctions
 }
-# Keep an already-running worker's engine untouched. Bootstrap a source engine only when none is loaded.
-if(-not $loadedEngine){
+# Keep an already-running worker's engine untouched. Import source into this sync scope only if no publisher is loaded.
+if(-not $engineCanPublish){
     Import-Module $core -Force -Scope Local
+    $engineCanPublish=$null -ne (Get-Command -Name 'Publish-AuLocalModulePackage' -ErrorAction SilentlyContinue)
     $engineCanInstall=$null -ne (Get-Command -Name 'Install-AuModulePackage' -ErrorAction SilentlyContinue)
 }
+if(-not $engineCanPublish){throw 'The active AutoUpdate engine cannot publish the shared module.'}
 if($unchanged){
     $cache=$null
     if($engineCanInstall){$cache=Install-AuModulePackage -PackageRoot $packageRoot -StateRoot $StateRoot -ModuleId AutoUpdate}
