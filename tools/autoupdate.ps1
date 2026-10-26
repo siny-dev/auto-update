@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register','publish-module','resolve-modules')][string]$Command,
+    [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register','publish-module','resolve-modules','report-module-status','module-status')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$AppId='AutoUpdate',
@@ -8,7 +8,10 @@ param(
     [string]$Repository,
     [string]$ModuleId,
     [string]$ModuleSourceRoot='\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules',
-    [string]$AppManifestPath
+    [string]$AppManifestPath,
+    [string]$Version,
+    [ValidateSet('loaded','active')][string]$RuntimeState,
+    [int]$ApplicationProcessId=0
 )
 $ErrorActionPreference='Stop'
 $sourceModule=Join-Path $PSScriptRoot '..\source\AutoUpdate.Core.psm1'
@@ -22,7 +25,7 @@ if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
     if($engineEntry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $requiredFunction=switch($Command){'publish-module'{'function Publish-AuLocalModulePackage'}'resolve-modules'{'function Resolve-AuAppModules'}default{'function Get-AuVerifiedCurrent'}}
+    $requiredFunction=switch($Command){'publish-module'{'function Publish-AuLocalModulePackage'}'resolve-modules'{'function Resolve-AuAppModules'}'report-module-status'{'function Set-AuModuleRuntimeStatus'}'module-status'{'function Get-AuModuleRuntimeStatus'}default{'function Get-AuVerifiedCurrent'}}
     if(Select-String -LiteralPath $candidate -SimpleMatch $requiredFunction -Quiet){$sourceModule=$candidate}
 }
 Import-Module $sourceModule -Force
@@ -47,6 +50,12 @@ try {
     } elseif ($Command -eq 'resolve-modules') {
         if([string]::IsNullOrWhiteSpace($AppManifestPath) -or [string]::IsNullOrWhiteSpace($ModuleSourceRoot)){throw 'AppManifestPath and ModuleSourceRoot are required for resolve-modules.'}
         $result = Resolve-AuAppModules -AppManifestPath $AppManifestPath -ModuleSourceRoot $ModuleSourceRoot -StateRoot $StateRoot
+    } elseif ($Command -eq 'report-module-status') {
+        if([string]::IsNullOrWhiteSpace($ModuleId) -or [string]::IsNullOrWhiteSpace($Version) -or [string]::IsNullOrWhiteSpace($RuntimeState)){throw 'ModuleId, Version, and RuntimeState are required for report-module-status.'}
+        $result = Set-AuModuleRuntimeStatus -StateRoot $StateRoot -AppId $AppId -ModuleId $ModuleId -Version $Version -RuntimeState $RuntimeState -ProcessId $ApplicationProcessId
+    } elseif ($Command -eq 'module-status') {
+        if([string]::IsNullOrWhiteSpace($ModuleId)){throw 'ModuleId is required for module-status.'}
+        $result = [pscustomobject]@{schema=1;status='ready';app_id=$AppId;module_id=$ModuleId;records=@(Get-AuModuleRuntimeStatus -StateRoot $StateRoot -AppId $AppId -ModuleId $ModuleId)}
     } else {
         $result = Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
         if (-not $result) { $result = [pscustomobject]@{Status='not-installed';AppId=$AppId} }

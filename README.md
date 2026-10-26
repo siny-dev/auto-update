@@ -99,3 +99,8 @@ config/update-policy.json이 연결된 앱의 공용 확인 주기입니다. 시
 ## Re-sleeving 로컬 패키지 적용
 
 AutoUpdate CLI의 install-local 명령은 공유 outbox/apps/<AppId>에서 크기·SHA-256 검증을 마친 최신 로컬 패키지를 설치합니다. Re-sleeving 연결부는 이를 사용하므로 GitHub 릴리스 없이도 H255 공유 실행본을 갱신할 수 있습니다. 실행 파일 교체는 앱별 안전 적용 도구가 맡고 공용 엔진은 앱 폴더로 복사하지 않습니다.
+## Module status evidence and publishing overlap
+
+The resolve-modules response marks verified cache delivery as L1 and runtime_state=not-reported. App connectors report L2 only after loading the verified path and L3 only after the new code is actually active. Use report-module-status with the host app PID when invoking the CLI as a child process; module-status reads the per-PC app/module/process records. Existing apps need a one-time connector change before they can report activation.
+
+Concurrent module publications for the same ID use an exclusive open-file lock under ModuleSourceRoot\locks. A competing publisher stops without changing the pointer; it can retry on its next update cycle. Cross-PC behavior of SMB open-file locks remains part of the two-PC test.

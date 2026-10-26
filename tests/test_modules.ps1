@@ -31,10 +31,24 @@ try{
     [void][IO.Directory]::CreateDirectory($testRoot)
     $sourceRoot=Join-Path $testRoot 'published';$state=Join-Path $testRoot 'state'
     $p100=Build-Module '1.0.0' 1 'function Get-SharedValue { "one" }'
-    $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sourceRoot -ModuleId SharedLib
+    $lockPath=Join-Path (Join-Path $sourceRoot 'locks') 'SharedLib.publish.lock';[void][IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))
+$heldLock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+try{
+    $blocked=$false;try{Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sourceRoot -ModuleId SharedLib -LockTimeoutMilliseconds 0|Out-Null}catch{$blocked=$_.Exception.Message -like 'Another publisher*'}
+    Assert $blocked 'Concurrent module publication was not blocked.'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'SharedLib/current.json'))) 'Blocked publication changed the module pointer.'
+}finally{$heldLock.Dispose()}
+$publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sourceRoot -ModuleId SharedLib
     Assert ($publish.Status -eq 'published') 'Initial module version did not publish.'
     $appV1=Write-AppManifest 1
     $resolved=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
+    Assert ($resolved.modules[0].delivery_level -eq 'L1' -and $resolved.modules[0].runtime_state -eq 'not-reported') 'Module resolution claimed activation before the app reported loading it.'
+    $loadedStatus=Set-AuModuleRuntimeStatus -StateRoot $state -AppId module-test-app -ModuleId SharedLib -Version 1.0.0 -RuntimeState loaded
+    Assert ($loadedStatus.delivery_level -eq 'L2') 'Loaded module status did not report L2.'
+    $activeStatus=Set-AuModuleRuntimeStatus -StateRoot $state -AppId module-test-app -ModuleId SharedLib -Version 1.0.0 -RuntimeState active
+    Assert ($activeStatus.delivery_level -eq 'L3') 'Active module status did not report L3.'
+    $runtimeRows=@(Get-AuModuleRuntimeStatus -StateRoot $state -AppId module-test-app -ModuleId SharedLib)
+    Assert ($runtimeRows.Count -eq 1 -and $runtimeRows[0].runtime_state -eq 'active' -and $runtimeRows[0].process_alive) 'Runtime status did not preserve the current process and active version.'
     Assert ($resolved.status -eq 'ready' -and $resolved.modules[0].version -eq '1.0.0' -and $resolved.modules[0].verified) 'First module resolve did not return the verified published version.'
     Assert (Test-Path -LiteralPath (Join-Path $resolved.modules[0].module_path 'module.psm1')) 'Resolved cache path does not contain module payload.'
     $repeat=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
@@ -76,6 +90,13 @@ try{
     $resolveArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','resolve-modules','-AppManifestPath',$cliAppPath,'-ModuleSourceRoot',$sourceRoot,'-StateRoot',(Join-Path $testRoot 'cli-state'))
     $cliResolve=Invoke-JsonProcess $resolveArgs
     Assert ($cliResolve.ExitCode -eq 0 -and ($cliResolve.StdOut|ConvertFrom-Json).modules[0].version -eq '3.0.0') 'resolve-modules CLI did not resolve the published module.'
+    $reportArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','report-module-status','-AppId','cli-module-app','-ModuleId','CliLib','-Version','3.0.0','-RuntimeState','active','-ApplicationProcessId',[string]$PID,'-StateRoot',(Join-Path $testRoot 'cli-state'))
+    $cliReport=Invoke-JsonProcess $reportArgs
+    Assert ($cliReport.ExitCode -eq 0 -and ($cliReport.StdOut|ConvertFrom-Json).delivery_level -eq 'L3') 'report-module-status CLI did not record an active app version.'
+    $statusArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','module-status','-AppId','cli-module-app','-ModuleId','CliLib','-StateRoot',(Join-Path $testRoot 'cli-state'))
+    $cliStatus=Invoke-JsonProcess $statusArgs
+    $statusResult=$cliStatus.StdOut|ConvertFrom-Json
+    Assert ($cliStatus.ExitCode -eq 0 -and $statusResult.records.Count -eq 1 -and $statusResult.records[0].delivery_level -eq 'L3') ('module-status CLI failed. Exit=' + $cliStatus.ExitCode + ' stdout=' + $cliStatus.StdOut + ' stderr=' + $cliStatus.StdErr)
 
     $sourcePointer=Join-Path $sourceRoot 'SharedLib/current.json';Remove-Item -LiteralPath $sourcePointer -Force
     $offline=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state

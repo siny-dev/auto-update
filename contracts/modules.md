@@ -23,3 +23,18 @@ Resolve requirements using `tools/autoupdate.ps1 -Command resolve-modules -AppMa
 The application must call the resolver at its normal update check (10 minutes in production; 5 minutes while testing) and activate the returned path through its own safe-point adapter. Loading a new path does not replace code already loaded into memory. Resource/data modules can be switched live when the app has a safe boundary; code/runtime modules require a reload hook that actually unloads and reloads the module, otherwise mark the module `restart` and use the existing save-state/restart/restore path. This contract provides shared storage and version selection; it does not claim every existing app is connected automatically. Each app needs a one-time dependency declaration and activation adapter.
 
 The v1 publisher policy is local shared-folder trust (`local-share-v1`); there is no signature/remote trust model yet. SHA-256 detects accidental damage and inconsistent files, but does not authenticate who published a package. Keep the module source folder writable only by the intended maintainers. GitHub publication is deliberately outside this local pilot.
+## Delivery and activation evidence (L1/L2/L3)
+
+A resolver result is only delivery evidence: each resolved module reports delivery_level=L1 and runtime_state=not-reported. L1 means a SHA-256-verified immutable version exists in the PC cache; it does not mean the application loaded or activated it.
+
+After an app connector actually loads that version, it reports L2. Only after the app's safe-point reload commits and new calls are using that version may it report L3. A connector may report these transitions through the shared CLI:
+
+- autoupdate.ps1 -Command report-module-status -AppId <app-id> -ModuleId <module-id> -Version <version> -RuntimeState loaded -ApplicationProcessId <app-process-id>
+- autoupdate.ps1 -Command report-module-status -AppId <app-id> -ModuleId <module-id> -Version <version> -RuntimeState active -ApplicationProcessId <app-process-id>
+- autoupdate.ps1 -Command module-status -AppId <app-id> -ModuleId <module-id>
+
+loaded is reported only after the app loads the verified module path. active is reported only after its actual activation hook succeeds; downloading or changing a pointer is not enough. When the CLI runs as a child process, pass the host application's process ID. Status is saved per PC, app, module, and process under the AutoUpdate state root. The query includes process liveness checked against the process start time, so a stale record from an exited process is not presented as a live instance. Existing apps need a one-time connector change before they can report L2/L3.
+
+## Publisher overlap
+
+Local module publication now holds an exclusive open-file lock at <ModuleSourceRoot>\locks\<module-id>.publish.lock while it validates and stages the immutable version and switches the pointer. Competing publishers fail without changing the pointer and may retry on their next cycle. A leftover lock file is harmless because exclusion is held by the open handle, which the OS releases when the process exits. The current automated test covers concurrent local processes; cross-PC SMB handle-lock behavior still needs a two-PC pilot test.

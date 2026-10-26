@@ -814,6 +814,61 @@ function Get-AuCachedModuleVersions {
     return @($available|Sort-Object { [version]$_.Version } -Descending)
 }
 
+function Set-AuModuleRuntimeStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$StateRoot,
+        [Parameter(Mandatory=$true)][string]$AppId,
+        [Parameter(Mandatory=$true)][string]$ModuleId,
+        [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
+        [Parameter(Mandatory=$true)][ValidateSet('loaded','active')][string]$RuntimeState,
+        [int]$ProcessId=0
+    )
+    if($AppId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $ModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid app or module identity.'}
+    if($ProcessId -le 0){$ProcessId=$PID}
+    $verified=Get-AuVerifiedModuleVersion -StateRoot $StateRoot -ModuleId $ModuleId -Version $Version
+    if(-not $verified){throw 'Cannot report a module version that is not present and verified in the PC cache.'}
+    $statusRoot=Get-AuContainedPath $StateRoot "runtime-status/$AppId/$ModuleId"
+    [void][IO.Directory]::CreateDirectory($statusRoot)
+    $statusPath=Join-Path $statusRoot ($ProcessId.ToString()+'.json')
+    $temporary=$statusPath+'.'+[guid]::NewGuid().ToString('N')+'.part'
+    $process=Get-Process -Id $ProcessId -ErrorAction Stop
+    $status=[ordered]@{schema=1;app_id=$AppId;module_id=$ModuleId;version=$Version;api_major=$verified.ApiMajor;runtime_state=$RuntimeState;delivery_level=$(if($RuntimeState -eq 'loaded'){'L2'}else{'L3'});process_id=$ProcessId;process_start_utc=$process.StartTime.ToUniversalTime().ToString('o');observed_utc=[DateTime]::UtcNow.ToString('o')}
+    [IO.File]::WriteAllText($temporary,($status|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    try{
+        if([IO.File]::Exists($statusPath)){
+            $backup=$statusPath+'.bak'
+            if([IO.File]::Exists($backup)){[IO.File]::Delete($backup)}
+            [IO.File]::Replace($temporary,$statusPath,$backup,$true)
+            if([IO.File]::Exists($backup)){[IO.File]::Delete($backup)}
+        }else{[IO.File]::Move($temporary,$statusPath)}
+    }catch{
+        if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}
+        throw
+    }
+    return [pscustomobject]$status
+}
+
+function Get-AuModuleRuntimeStatus {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId,[Parameter(Mandatory=$true)][string]$ModuleId)
+    if($AppId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $ModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid app or module identity.'}
+    $statusRoot=Get-AuContainedPath $StateRoot "runtime-status/$AppId/$ModuleId"
+    if(-not (Test-Path -LiteralPath $statusRoot -PathType Container)){return @()}
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($file in Get-ChildItem -LiteralPath $statusRoot -Filter '*.json' -File -ErrorAction SilentlyContinue){
+        try{
+            $item=Get-Content -Raw -LiteralPath $file.FullName|ConvertFrom-Json
+            if($item.schema -ne 1 -or $item.app_id -cne $AppId -or $item.module_id -cne $ModuleId -or $item.process_id -ne [int]$file.BaseName -or $item.runtime_state -notin @('loaded','active')){continue}
+            $alive=$false
+            try{$proc=Get-Process -Id ([int]$item.process_id) -ErrorAction Stop;$recorded=[DateTime]::Parse([string]$item.process_start_utc).ToUniversalTime();$alive=([Math]::Abs(($proc.StartTime.ToUniversalTime()-$recorded).TotalSeconds) -lt 2)}catch{}
+            $item|Add-Member -NotePropertyName process_alive -NotePropertyValue $alive -Force
+            $records.Add($item)
+        }catch{}
+    }
+    return @($records|Sort-Object process_id)
+}
+
 function Install-AuModulePackage {
     [CmdletBinding()]
     param(
@@ -884,7 +939,7 @@ function Install-AuModulePackage {
     }finally{if($owned){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
 
-function Publish-AuLocalModulePackage {
+function Publish-AuLocalModulePackageUnlocked {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$ModuleId)
     $package=[IO.Path]::GetFullPath($PackageRoot)
@@ -943,6 +998,39 @@ function Publish-AuLocalModulePackage {
     return [pscustomobject]@{Status='already-published';ModuleId=$ModuleId;Version=$version;Path=$target;Message='Identical immutable module version is already published.'}
 }
 
+function Enter-AuModulePublishLock {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$Path,[ValidateRange(0,300000)][int]$TimeoutMilliseconds=10000)
+    $fullPath=[IO.Path]::GetFullPath($Path)
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $fullPath))
+    $timer=[Diagnostics.Stopwatch]::StartNew()
+    while($true){
+        try{return [IO.File]::Open($fullPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+        catch [IO.IOException]{
+            if($timer.ElapsedMilliseconds -ge $TimeoutMilliseconds){return $null}
+            $remaining=$TimeoutMilliseconds-[int]$timer.ElapsedMilliseconds
+            if($remaining -le 0){return $null}
+            Start-Sleep -Milliseconds ([Math]::Min($remaining,(Get-Random -Minimum 100 -Maximum 350)))
+        }
+    }
+}
+
+function Publish-AuLocalModulePackage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$PackageRoot,
+        [Parameter(Mandatory=$true)][string]$ModuleSourceRoot,
+        [Parameter(Mandatory=$true)][string]$ModuleId,
+        [ValidateRange(0,300000)][int]$LockTimeoutMilliseconds=10000
+    )
+    if($ModuleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid module identity.'}
+    $lockPath=Join-Path (Join-Path $ModuleSourceRoot 'locks') ($ModuleId+'.publish.lock')
+    $handle=Enter-AuModulePublishLock -Path $lockPath -TimeoutMilliseconds $LockTimeoutMilliseconds
+    if($null -eq $handle){throw "Another publisher is publishing module $ModuleId; no files or pointer were changed. Retry on the next cycle."}
+    try{return Publish-AuLocalModulePackageUnlocked -PackageRoot $PackageRoot -ModuleSourceRoot $ModuleSourceRoot -ModuleId $ModuleId}
+    finally{$handle.Dispose()}
+}
+
 function Update-AuModuleFromLocalSource {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[Parameter(Mandatory=$true)][int]$ApiMajor)
@@ -995,9 +1083,9 @@ function Resolve-AuAppModules {
             throw \"Required module $moduleId API $apiMajor is not cached.\"
         }
         $chosen=$cached[0]
-        $resolved.Add([pscustomobject]@{module_id=$moduleId;version=$chosen.Version;api_major=$chosen.ApiMajor;activation_mode=$chosen.ActivationMode;module_path=$chosen.Path;verified=$true;source_status=$sourceStatus;source_error=$sourceError})
+        $resolved.Add([pscustomobject]@{module_id=$moduleId;version=$chosen.Version;api_major=$chosen.ApiMajor;activation_mode=$chosen.ActivationMode;module_path=$chosen.Path;verified=$true;delivery_level='L1';runtime_state='not-reported';source_status=$sourceStatus;source_error=$sourceError})
     }
     return [pscustomobject]@{schema=1;status='ready';app_id=[string]$app.app_id;modules=@($resolved)}
 }
 
-Export-ModuleMember -Function Test-AuManifest,Test-AuModuleManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuModulePackage,Publish-AuLocalModulePackage,Update-AuModuleFromLocalSource,Resolve-AuAppModules,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuCurrentModule,Get-AuVerifiedModuleVersion,Get-AuCachedModuleVersions,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Test-AuModuleManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuModulePackage,Publish-AuLocalModulePackage,Update-AuModuleFromLocalSource,Resolve-AuAppModules,Set-AuModuleRuntimeStatus,Get-AuModuleRuntimeStatus,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuCurrentModule,Get-AuVerifiedModuleVersion,Get-AuCachedModuleVersions,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
