@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register','publish-module','resolve-modules','report-module-status','module-status')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
@@ -48,7 +48,7 @@ function Get-AuCachedModuleCore {
             if($info.Length -ne [long]$entry.size -or (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine [string]$entry.sha256){return $null}
             if($relative -ceq 'source/AutoUpdate.Core.psm1'){$corePath=$candidate}
         }
-        if(-not $corePath -or -not (Select-String -LiteralPath $corePath -SimpleMatch $RequiredFunction -Quiet)){return $null}
+        if(-not $corePath -or -not (Select-String -LiteralPath $corePath -SimpleMatch $RequiredFunction -Quiet) -or -not (Select-String -LiteralPath $corePath -SimpleMatch 'function Set-AuRuntimeEngineVersion' -Quiet)){return $null}
         return $corePath
     }catch{return $null}
 }
@@ -65,11 +65,12 @@ if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
     $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
 
-    if(Select-String -LiteralPath $candidate -SimpleMatch $requiredFunction -Quiet){$sourceModule=$candidate}
+    if((Select-String -LiteralPath $candidate -SimpleMatch $requiredFunction -Quiet) -and (Select-String -LiteralPath $candidate -SimpleMatch 'function Set-AuRuntimeEngineVersion' -Quiet)){$sourceModule=$candidate}
 }
 $moduleCore=Get-AuCachedModuleCore -StateRoot $StateRoot -RequiredFunction $requiredFunction
 if($moduleCore){$sourceModule=$moduleCore}
 Import-Module $sourceModule -Force
+[void](Set-AuRuntimeEngineVersion -StateRoot $StateRoot)
 try {
     if ($Command -eq 'install') {
         if ([string]::IsNullOrWhiteSpace($PackageRoot)) { throw 'PackageRoot is required for install.' }

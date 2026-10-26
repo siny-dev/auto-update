@@ -14,6 +14,25 @@ function Test-AuVersionAtLeast([string]$Current,[string]$Minimum) {
     catch { return $false }
 }
 
+function Set-AuRuntimeEngineVersion {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$StateRoot)
+    $script:AutoUpdateEngineVersion='0.1.0'
+    $current=Get-AuCurrent -StateRoot $StateRoot -AppId 'AutoUpdate'
+    if(-not $current){return [pscustomobject]@{Status='not-installed';Version='0.1.0';Verified=$false}}
+    $manifestPath=Join-Path $current.Path 'manifest.json'
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'Installed AutoUpdate manifest is missing.'}
+    $expectedHash=[string]$current.Pointer.manifest_sha256
+    if($expectedHash -notmatch '^[A-Fa-f0-9]{64}$' -or (Get-AuFileSha256 $manifestPath) -cne $expectedHash.ToLowerInvariant()){throw 'Installed AutoUpdate manifest hash is invalid.'}
+    $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+    if($manifest.app_id -cne 'AutoUpdate' -or [string]$manifest.version -cne $current.Version){throw 'Installed AutoUpdate pointer does not match its manifest.'}
+    $script:AutoUpdateEngineVersion=[string]$current.Version
+    try{
+        $verified=Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId 'AutoUpdate' -Architecture 'x64'
+        if(-not $verified -or -not $verified.Verified){throw 'Installed AutoUpdate engine could not be verified.'}
+        return [pscustomobject]@{Status='verified';Version=$verified.Version;Verified=$true}
+    }catch{$script:AutoUpdateEngineVersion='0.1.0';throw}
+}
 function Test-AuReleaseTagVersion([string]$Tag,[string]$Version) {
     if($Tag -notmatch '^[vV]?\d+\.\d+\.\d+$' -or $Version -notmatch '^\d+\.\d+\.\d+$'){return $false}
     try{return ([version]$Tag.TrimStart('v','V') -eq [version]$Version)}catch{return $false}
@@ -617,6 +636,7 @@ function Get-AuCurrent {
 function Get-AuVerifiedCurrent {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId,[ValidateSet('x86','x64','arm64')][string]$Architecture='x64')
+    if($AppId -cne 'AutoUpdate' -and $script:AutoUpdateEngineVersion -eq '0.1.0'){Set-AuRuntimeEngineVersion -StateRoot $StateRoot|Out-Null}
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if(-not $current){return $null}
     $manifestPath=Join-Path $current.Path 'manifest.json'
@@ -644,6 +664,7 @@ function Install-AuPackageUnlocked {
         [Parameter(Mandatory=$true)][string]$Architecture,
         [switch]$FailActivationForTest
     )
+    [void](Set-AuRuntimeEngineVersion -StateRoot $StateRoot)
     $packagePath = [IO.Path]::GetFullPath($PackageRoot)
     $manifestPath = Join-Path $packagePath 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Package manifest is missing.' }
@@ -1089,4 +1110,4 @@ function Resolve-AuAppModules {
     return [pscustomobject]@{schema=1;status='ready';app_id=[string]$app.app_id;modules=@($resolved)}
 }
 
-Export-ModuleMember -Function Test-AuManifest,Test-AuModuleManifest,Test-AuReleaseTagVersion,Install-AuPackage,Install-AuModulePackage,Publish-AuLocalModulePackage,Update-AuModuleFromLocalSource,Resolve-AuAppModules,Set-AuModuleRuntimeStatus,Get-AuModuleRuntimeStatus,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuCurrentModule,Get-AuVerifiedModuleVersion,Get-AuCachedModuleVersions,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
+Export-ModuleMember -Function Test-AuManifest,Test-AuModuleManifest,Test-AuReleaseTagVersion,Set-AuRuntimeEngineVersion,Install-AuPackage,Install-AuModulePackage,Publish-AuLocalModulePackage,Update-AuModuleFromLocalSource,Resolve-AuAppModules,Set-AuModuleRuntimeStatus,Get-AuModuleRuntimeStatus,Install-AuLatestRelease,Install-AuLatestAvailable,Publish-AuLocalPackage,Save-AuPackageToLocal,Get-AuReleaseUploadPlan,Get-AuLatestReleaseManifest,Compare-AuPackageCandidates,Get-AuLatestLocalPackage,Get-AuCurrent,Get-AuVerifiedCurrent,Get-AuCurrentModule,Get-AuVerifiedModuleVersion,Get-AuCachedModuleVersions,Get-AuFileSha256,Get-AuRegisteredApps,Register-AuApplication
