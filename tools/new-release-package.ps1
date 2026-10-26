@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputRoot
 )
 $ErrorActionPreference='Stop'
-$spec=Get-Content -Raw -LiteralPath $SpecPath | ConvertFrom-Json
+$spec=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($SpecPath)) | ConvertFrom-Json
 if($spec.app_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid app_id.'}
 if($spec.version -notmatch '^\d+\.\d+\.\d+$'){throw 'Invalid version.'}
 $mode=[string]$spec.mode

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][ValidateSet('install','install-local','update','status','resolve','register','publish-module','resolve-modules','report-module-status','module-status')][string]$Command,
     [string]$PackageRoot,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),

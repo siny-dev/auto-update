@@ -24,6 +24,19 @@ try{
     $recovered=Invoke-Build '2.0.0';Assert ($recovered.status -eq 'built' -and $recovered.version -eq '2.0.2') 'missing last package was incorrectly treated as unchanged'
     $remoteAhead=Invoke-Build '3.0.0';Assert ($remoteAhead.status -eq 'built' -and $remoteAhead.version -eq '3.0.1') 'unchanged local source did not rebuild above a newer remote package'
     $sameRemote=Invoke-Build '3.0.0';Assert ($sameRemote.status -eq 'unchanged' -and $sameRemote.version -eq '3.0.1') 'rebuilt package was not stable when the remote version remained behind'
+    $windowsPowerShell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if(Test-Path -LiteralPath $windowsPowerShell -PathType Leaf){
+        $unicodePayloadRoot=Join-Path $testRoot '한글-H255\payload'
+        [void][IO.Directory]::CreateDirectory((Join-Path $unicodePayloadRoot 'resources'))
+        [IO.File]::WriteAllText((Join-Path $unicodePayloadRoot 'resources\notice.json'),'unicode payload',[Text.UTF8Encoding]::new($false))
+        $unicodeRecipe=[ordered]@{app_id='unicode-build';version_seed='1.0.0';platform='windows';architecture='any';minimum_engine='0.1.0';mode='live';payload_root=$unicodePayloadRoot;files=@(@{path='resources/notice.json';kind='resource'})}
+        $unicodeRecipePath=Join-Path $testRoot '한글-build.json';$unicodeOutputRoot=Join-Path $testRoot 'unicode-outbox'
+        [IO.File]::WriteAllText($unicodeRecipePath,($unicodeRecipe|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+        $unicodeOutput=& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '..\tools\build-local-package.ps1') -RecipePath $unicodeRecipePath -PackageRoot $unicodeOutputRoot
+        if($LASTEXITCODE -ne 0){throw "Windows PowerShell 5.1 could not build a UTF-8 recipe containing Korean paths: $unicodeOutput"}
+        $unicodeResult=([string]::Join([Environment]::NewLine,@($unicodeOutput))|ConvertFrom-Json)
+        Assert ($unicodeResult.status -eq 'built' -and $unicodeResult.app_id -eq 'unicode-build') 'Windows PowerShell did not preserve a UTF-8 Korean payload path.'
+    }
     'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, rebuilds after package loss, and advances unchanged local package content beyond newer remote versions'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)

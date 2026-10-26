@@ -17,7 +17,7 @@ if($loadedEngine){
 if(-not $engineApiReady){Import-Module (Join-Path $repoRoot 'source\AutoUpdate.Core.psm1') -Force -Scope Local}
 $recipeFile=[IO.Path]::GetFullPath($RecipePath)
 $packageDirectory=[IO.Path]::GetFullPath($PackageRoot)
-$spec=Get-Content -Raw -LiteralPath $recipeFile|ConvertFrom-Json
+$spec=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($recipeFile))|ConvertFrom-Json
 if($spec.app_id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid app_id in build recipe.'}
 $seed=[string]$spec.version_seed
 if(-not $seed){$seed=[string]$spec.version}
