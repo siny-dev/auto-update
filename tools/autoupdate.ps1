@@ -14,6 +14,45 @@ param(
     [int]$ApplicationProcessId=0
 )
 $ErrorActionPreference='Stop'
+function Get-AuCachedModuleCore {
+    param([string]$StateRoot,[string]$RequiredFunction)
+    try{
+        $enginePointerPath=Join-Path $StateRoot 'apps\AutoUpdate\current.json'
+        if(-not (Test-Path -LiteralPath $enginePointerPath -PathType Leaf)){return $null}
+        $enginePointer=Get-Content -Raw -LiteralPath $enginePointerPath|ConvertFrom-Json
+        if($enginePointer.schema -ne 1 -or $enginePointer.app_id -cne 'AutoUpdate' -or $enginePointer.version -notmatch '^\d+\.\d+\.\d+$'){return $null}
+        $engineManifestPath=Join-Path (Join-Path $StateRoot ('apps\AutoUpdate\versions\'+$enginePointer.version)) 'manifest.json'
+        if(-not (Test-Path -LiteralPath $engineManifestPath -PathType Leaf)){return $null}
+        $engineManifest=Get-Content -Raw -LiteralPath $engineManifestPath|ConvertFrom-Json
+        if([version]$engineManifest.version -lt [version]'0.1.0'){return $null}
+        $modulePointerPath=Join-Path $StateRoot 'modules\AutoUpdate\current.json'
+        if(-not (Test-Path -LiteralPath $modulePointerPath -PathType Leaf)){return $null}
+        $modulePointer=Get-Content -Raw -LiteralPath $modulePointerPath|ConvertFrom-Json
+        if($modulePointer.schema -ne 1 -or $modulePointer.module_id -cne 'AutoUpdate' -or $modulePointer.version -notmatch '^\d+\.\d+\.\d+$' -or $modulePointer.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){return $null}
+        $versionRoot=Join-Path (Join-Path $StateRoot 'modules\AutoUpdate\versions') $modulePointer.version
+        $manifestPath=Join-Path $versionRoot 'module.json'
+        if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){return $null}
+        $manifestHash=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if($manifestHash -cne ([string]$modulePointer.manifest_sha256).ToLowerInvariant()){return $null}
+        $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+        if($manifest.schema -ne 1 -or $manifest.contract -cne 'autoupdate-module-v1' -or $manifest.module_id -cne 'AutoUpdate' -or [string]$manifest.version -cne [string]$modulePointer.version -or [int]$manifest.api_major -ne 1 -or [version]$engineManifest.version -lt [version]$manifest.minimum_engine){return $null}
+        $root=[IO.Path]::GetFullPath($versionRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+        $corePath=$null
+        foreach($entry in $manifest.files){
+            $relative=[string]$entry.path
+            if([string]::IsNullOrWhiteSpace($relative) -or $relative -match '(^[/\\]|^[A-Za-z]:|(^|[/\\])\.\.([/\\]|$)|:|[\x00-\x1f])'){return $null}
+            $candidate=[IO.Path]::GetFullPath((Join-Path $root ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))))
+            if(-not $candidate.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){return $null}
+            if(-not (Test-Path -LiteralPath $candidate -PathType Leaf)){return $null}
+            $info=Get-Item -LiteralPath $candidate
+            if($info.Length -ne [long]$entry.size -or (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine [string]$entry.sha256){return $null}
+            if($relative -ceq 'source/AutoUpdate.Core.psm1'){$corePath=$candidate}
+        }
+        if(-not $corePath -or -not (Select-String -LiteralPath $corePath -SimpleMatch $RequiredFunction -Quiet)){return $null}
+        return $corePath
+    }catch{return $null}
+}
+$requiredFunction=switch($Command){'publish-module'{'function Publish-AuLocalModulePackage'}'resolve-modules'{'function Resolve-AuAppModules'}'report-module-status'{'function Set-AuModuleRuntimeStatus'}'module-status'{'function Get-AuModuleRuntimeStatus'}default{'function Get-AuVerifiedCurrent'}}
 $sourceModule=Join-Path $PSScriptRoot '..\source\AutoUpdate.Core.psm1'
 $enginePointerPath=Join-Path $StateRoot 'apps\AutoUpdate\current.json'
 if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
@@ -25,9 +64,11 @@ if(Test-Path -LiteralPath $enginePointerPath -PathType Leaf){
     if($engineEntry.Count -ne 1){throw 'Installed AutoUpdate package has no single engine module.'}
     $candidate=Join-Path $installedRoot 'source\AutoUpdate.Core.psm1'
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $engineEntry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
-    $requiredFunction=switch($Command){'publish-module'{'function Publish-AuLocalModulePackage'}'resolve-modules'{'function Resolve-AuAppModules'}'report-module-status'{'function Set-AuModuleRuntimeStatus'}'module-status'{'function Get-AuModuleRuntimeStatus'}default{'function Get-AuVerifiedCurrent'}}
+
     if(Select-String -LiteralPath $candidate -SimpleMatch $requiredFunction -Quiet){$sourceModule=$candidate}
 }
+$moduleCore=Get-AuCachedModuleCore -StateRoot $StateRoot -RequiredFunction $requiredFunction
+if($moduleCore){$sourceModule=$moduleCore}
 Import-Module $sourceModule -Force
 try {
     if ($Command -eq 'install') {
