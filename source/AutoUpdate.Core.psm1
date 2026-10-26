@@ -833,7 +833,8 @@ function Set-AuModuleRuntimeStatus {
     $statusPath=Join-Path $statusRoot ($ProcessId.ToString()+'.json')
     $temporary=$statusPath+'.'+[guid]::NewGuid().ToString('N')+'.part'
     $process=Get-Process -Id $ProcessId -ErrorAction Stop
-    $status=[ordered]@{schema=1;app_id=$AppId;module_id=$ModuleId;version=$Version;api_major=$verified.ApiMajor;runtime_state=$RuntimeState;delivery_level=$(if($RuntimeState -eq 'loaded'){'L2'}else{'L3'});process_id=$ProcessId;process_start_utc=$process.StartTime.ToUniversalTime().ToString('o');observed_utc=[DateTime]::UtcNow.ToString('o')}
+    $processStartUtc=$process.StartTime.ToUniversalTime()
+    $status=[ordered]@{schema=1;app_id=$AppId;module_id=$ModuleId;version=$Version;api_major=$verified.ApiMajor;runtime_state=$RuntimeState;delivery_level=$(if($RuntimeState -eq 'loaded'){'L2'}else{'L3'});process_id=$ProcessId;process_start_utc=$processStartUtc.ToString('o');process_start_utc_ticks=[long]$processStartUtc.Ticks;observed_utc=[DateTime]::UtcNow.ToString('o')}
     [IO.File]::WriteAllText($temporary,($status|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
     try{
         if([IO.File]::Exists($statusPath)){
@@ -861,7 +862,7 @@ function Get-AuModuleRuntimeStatus {
             $item=Get-Content -Raw -LiteralPath $file.FullName|ConvertFrom-Json
             if($item.schema -ne 1 -or $item.app_id -cne $AppId -or $item.module_id -cne $ModuleId -or $item.process_id -ne [int]$file.BaseName -or $item.runtime_state -notin @('loaded','active')){continue}
             $alive=$false
-            try{$proc=Get-Process -Id ([int]$item.process_id) -ErrorAction Stop;$recorded=[DateTime]::Parse([string]$item.process_start_utc).ToUniversalTime();$alive=([Math]::Abs(($proc.StartTime.ToUniversalTime()-$recorded).TotalSeconds) -lt 2)}catch{}
+            try{$proc=Get-Process -Id ([int]$item.process_id) -ErrorAction Stop;$actualTicks=$proc.StartTime.ToUniversalTime().Ticks;if($item.process_start_utc_ticks -is [ValueType]){$alive=([Math]::Abs([double]$actualTicks-[double]$item.process_start_utc_ticks) -lt 20000000)}elseif($item.process_start_utc){if($item.process_start_utc -is [DateTime]){$recorded=$item.process_start_utc.ToUniversalTime()}else{$recorded=[DateTimeOffset]::Parse([string]$item.process_start_utc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime};$alive=([Math]::Abs(($proc.StartTime.ToUniversalTime()-$recorded).TotalSeconds) -lt 2)}}catch{}
             $item|Add-Member -NotePropertyName process_alive -NotePropertyValue $alive -Force
             $records.Add($item)
         }catch{}
