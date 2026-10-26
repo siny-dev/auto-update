@@ -78,12 +78,12 @@ AutoUpdate는 프로그램 소스의 Git 동기화와, 실행 중인 앱이 받�
 
 `tools/autoupdate.ps1 -Command install -PackageRoot <검증용 패키지 폴더> -StateRoot <앱 데이터 경로> -AppId <앱 ID> -Architecture x64`
 
-공유 모듈은 아래 순서로 로컬 게시·확인한다. `ModuleSourceRoot` 기본값은 `\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules`다. 각 앱은 `app.json`에 `autoupdate-app-modules-v1` 의존성 목록을 두고, 다음 확인 주기에 `resolve-modules`를 불러 검증된 PC 공용 캐시 경로를 받는다.
+공유 모듈은 아래 순서로 로컬 게시·확인한다. `ModuleSourceRoot` 기본값은 `\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules`다. 각 앱은 `app-modules.json`에 `autoupdate-app-modules-v1` 의존성 목록을 두고, 다음 확인 주기에 `resolve-modules`를 불러 검증된 PC 공용 캐시 경로를 받는다.
 
 ```powershell
 .\tools\build-module-package.ps1 -ModuleId Speakly -Version 1.0.0 -ApiMajor 1 -SourceRoot <모듈-소스> -OutputRoot <새-패키지-폴더> -ActivationMode restart
 .\tools\autoupdate.ps1 -Command publish-module -ModuleId Speakly -PackageRoot <새-패키지-폴더>
-.\tools\autoupdate.ps1 -Command resolve-modules -AppManifestPath <앱의-app.json> -StateRoot <PC 공용 AutoUpdate 상태 경로>
+.\tools\autoupdate.ps1 -Command resolve-modules -AppManifestPath <앱의-app-modules.json> -StateRoot <PC 공용 AutoUpdate 상태 경로>
 ```
 
 `app-base` 템플릿에는 공용 연결부가 포함되어 있으며 앱은 실행 후 공용 상태 저장소에 자동 등록된다. 등록부는 PC별이므로 실제 전파 대상을 확인하려면 해당 PC의 `%LOCALAPPDATA%\Siny\AutoUpdate\registry\apps.json`과 `logs\app-updates.jsonl`을 확인한다. 기존 자체 업데이터 앱은 한 번 공용 연결부를 적용해야 하며, 미등록 앱은 자동으로 업데이트되지 않는다.
