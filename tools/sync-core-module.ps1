@@ -30,18 +30,24 @@ if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
     }
 }
 $core=Join-Path $root 'source\AutoUpdate.Core.psm1'
-$requiredEngineFunctions=@('Publish-AuLocalModulePackage','Install-AuModulePackage')
+$requiredEngineFunctions=@('Publish-AuLocalModulePackage')
 $loadedEngine=Get-Module -Name 'AutoUpdate.Core' -ErrorAction SilentlyContinue|Select-Object -First 1
 $engineApiReady=$false
+$engineCanInstall=$false
 if($loadedEngine){
     $availableFunctions=@(Get-Command -Module $loadedEngine.Name -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)
     $engineApiReady=@($requiredEngineFunctions|Where-Object{$_ -notin $availableFunctions}).Count -eq 0
+    $engineCanInstall='Install-AuModulePackage' -in $availableFunctions
 }
-# Keep the worker's imported engine untouched; load the current source only in this sync script scope when needed.
-if(-not $engineApiReady){Import-Module $core -Force -Scope Local}
+# Keep an already-running worker's engine untouched. Bootstrap a source engine only when none is loaded.
+if(-not $loadedEngine){
+    Import-Module $core -Force -Scope Local
+    $engineCanInstall=$null -ne (Get-Command -Name 'Install-AuModulePackage' -ErrorAction SilentlyContinue)
+}
 if($unchanged){
-    $cache=Install-AuModulePackage -PackageRoot $packageRoot -StateRoot $StateRoot -ModuleId AutoUpdate
-    [pscustomobject]@{status='unchanged';module_id='AutoUpdate';version=[string]$pointer.version;cache_status=[string]$cache.Status;cache_version=[string]$cache.Version;message='Shared AutoUpdate module matches its source and the local PC cache was checked.'}|ConvertTo-Json -Compress
+    $cache=$null
+    if($engineCanInstall){$cache=Install-AuModulePackage -PackageRoot $packageRoot -StateRoot $StateRoot -ModuleId AutoUpdate}
+    [pscustomobject]@{status='unchanged';module_id='AutoUpdate';version=[string]$pointer.version;cache_status=$(if($cache){[string]$cache.Status}else{'installer-unavailable'});cache_version=$(if($cache){[string]$cache.Version}else{$null});message='Shared AutoUpdate module matches its source; local cache activation was attempted when supported by the loaded engine.'}|ConvertTo-Json -Compress
     exit 0
 }
 $work=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-module-package-'+[guid]::NewGuid().ToString('N'))
@@ -57,8 +63,8 @@ try{
     & (Join-Path $PSScriptRoot 'build-module-package.ps1') -ModuleId AutoUpdate -Version $version -ApiMajor 1 -MinimumEngine '0.1.0' -SourceRoot $sourceRoot -OutputRoot $package -ActivationMode restart | Out-Null
     $result=Publish-AuLocalModulePackage -PackageRoot $package -ModuleSourceRoot $ModuleSourceRoot -ModuleId AutoUpdate
     $cache=$null
-    if($result.Status -in @('published','already-published')){$cache=Install-AuModulePackage -PackageRoot $package -StateRoot $StateRoot -ModuleId AutoUpdate}
-    [pscustomobject]@{status=[string]$result.Status;module_id='AutoUpdate';version=$version;cache_status=$(if($cache){[string]$cache.Status}else{'not-installed'});cache_version=$(if($cache){[string]$cache.Version}else{$null});message=[string]$result.Message}|ConvertTo-Json -Compress
+    if($result.Status -in @('published','already-published') -and $engineCanInstall){$cache=Install-AuModulePackage -PackageRoot $package -StateRoot $StateRoot -ModuleId AutoUpdate}
+    [pscustomobject]@{status=[string]$result.Status;module_id='AutoUpdate';version=$version;cache_status=$(if($cache){[string]$cache.Status}elseif($result.Status -in @('published','already-published')){'installer-unavailable'}else{'not-installed'});cache_version=$(if($cache){[string]$cache.Version}else{$null});message=[string]$result.Message}|ConvertTo-Json -Compress
 }finally{
     if(Test-Path -LiteralPath $work){Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue}
 }
