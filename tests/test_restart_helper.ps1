@@ -43,9 +43,16 @@ try{
     $state=Join-Path $root 'resume.json';[IO.File]::WriteAllText($state,'{"screen":"settings","draft":"preserve"}',[Text.UTF8Encoding]::new($false))
     $ack=Join-Path $root 'ack.ps1'
     $ackSource=@"
+`$stateIndex=[Array]::IndexOf([string[]]`$args,'--autoupdate-state')
 `$healthIndex=[Array]::IndexOf([string[]]`$args,'--autoupdate-health')
 `$versionIndex=[Array]::IndexOf([string[]]`$args,'--autoupdate-version')
-if(`$healthIndex -lt 0 -or `$versionIndex -lt 0){exit 10}
+if(`$stateIndex -lt 0 -or `$healthIndex -lt 0 -or `$versionIndex -lt 0){exit 10}
+`$statePath=`$args[`$stateIndex+1]
+if(-not (Test-Path -LiteralPath `$statePath -PathType Leaf)){exit 11}
+`$saved=Get-Content -Raw -LiteralPath `$statePath|ConvertFrom-Json
+if(`$saved.screen -cne 'settings' -or `$saved.draft -cne 'preserve'){exit 12}
+`$restored=[ordered]@{screen=`$saved.screen;draft=`$saved.draft;restored_by='test-app'}
+[IO.File]::WriteAllText(`$statePath+'.restored',(`$restored|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new(`$false))
 [IO.File]::WriteAllText(`$args[`$healthIndex+1],`$args[`$versionIndex+1],[Text.UTF8Encoding]::new(`$false))
 "@
     [IO.File]::WriteAllText($ack,$ackSource,[Text.UTF8Encoding]::new($false))
@@ -55,6 +62,7 @@ if(`$healthIndex -lt 0 -or `$versionIndex -lt 0){exit 10}
     $success=Invoke-Helper (Join-Path $root 'state\apps\restart-demo\versions\1.0.0') $ack $target 0
     $ok=Get-Content -Raw $success.stdout|ConvertFrom-Json;Assert ($ok.status -eq 'confirmed') ('restart helper did not confirm healthy process: '+(Get-Content -Raw $success.stdout)+' ERR '+(Get-Content -Raw $success.stderr))
     $packageExe=Join-Path $root 'state\apps\restart-demo\versions\1.0.0\demo.exe';Assert ((Get-AuFileSha256 $target) -eq (Get-AuFileSha256 $packageExe)) 'restart helper did not replace target with the verified executable'
+    $restored=Get-Content -Raw ($state+'.restored')|ConvertFrom-Json;Assert ($restored.screen -ceq 'settings' -and $restored.draft -ceq 'preserve' -and $restored.restored_by -ceq 'test-app') 'The relaunched app did not restore the saved screen and draft before acknowledging health.'
     $package2=New-Package '1.0.1';Install-AuPackage -PackageRoot $package2 -StateRoot (Join-Path $root 'state') -AppId restart-demo -Architecture x64|Out-Null
     Wait-ForFileUnlocked -Path $target
     [IO.File]::Copy($oldExe,$target,$true);$oldHash=Get-AuFileSha256 $target
