@@ -60,7 +60,9 @@ function Invoke-UpdateCycle{
         try{
             $moduleOutput=& (Join-Path $root 'tools\sync-core-module.ps1') -StateRoot $StateRoot
             $moduleResult=([string]::Join([Environment]::NewLine,@($moduleOutput|ForEach-Object{[string]$_}))|ConvertFrom-Json -ErrorAction Stop)
-            Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status=('module-'+$moduleResult.status);Version=$moduleResult.version;Message=$moduleResult.message})
+            $moduleMessage=[string]$moduleResult.message
+            if($moduleResult.cache_status){$moduleMessage+=' Local PC module cache: '+[string]$moduleResult.cache_status+' ('+[string]$moduleResult.cache_version+').'}
+            Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status=('module-'+$moduleResult.status);Version=$moduleResult.version;Message=$moduleMessage})
         }catch{
             $moduleMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
             Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='module-sync-failed';Version=$null;Message=$moduleMessage})

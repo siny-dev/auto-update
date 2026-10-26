@@ -48,28 +48,32 @@ try{
 
     $syncScript=Join-Path $fixtureTools 'sync-core-module.ps1'
     $first=Invoke-FixtureModuleSync $syncScript $stateRoot $publishedRoot
-    if($first.status -cne 'published' -or $first.version -cne '1.0.0'){
-        throw 'Initial AutoUpdate module sync did not publish version 1.0.0.'
+    if($first.status -cne 'published' -or $first.version -cne '1.0.0' -or $first.cache_status -cne 'activated'){
+        throw 'Initial AutoUpdate module sync did not publish and activate version 1.0.0 in the local PC cache.'
     }
+    $localPointer=Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'modules\AutoUpdate\current.json')|ConvertFrom-Json
+    if($localPointer.version -cne '1.0.0'){throw 'Initial module publication did not update the local PC cache pointer.'}
 
     $unchanged=Invoke-FixtureModuleSync $syncScript $stateRoot $publishedRoot
-    if($unchanged.status -cne 'unchanged' -or $unchanged.version -cne '1.0.0'){
-        throw 'An unchanged AutoUpdate module source created a redundant version.'
+    if($unchanged.status -cne 'unchanged' -or $unchanged.version -cne '1.0.0' -or $unchanged.cache_status -cne 'already-cached'){
+        throw 'An unchanged AutoUpdate module source failed to confirm the local cache or created a redundant version.'
     }
 
     $corePath=Join-Path $fixtureSource 'AutoUpdate.Core.psm1'
     [IO.File]::AppendAllText($corePath,"`n# isolated module source change`n",[Text.UTF8Encoding]::new($false))
     $changed=Invoke-FixtureModuleSync $syncScript $stateRoot $publishedRoot
-    if($changed.status -cne 'published' -or $changed.version -cne '1.0.1'){
-        throw 'A changed AutoUpdate module source did not publish the next patch version.'
+    if($changed.status -cne 'published' -or $changed.version -cne '1.0.1' -or $changed.cache_status -cne 'activated'){
+        throw 'A changed AutoUpdate module source did not publish and activate the next patch in the local PC cache.'
     }
+    $localPointer=Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'modules\AutoUpdate\current.json')|ConvertFrom-Json
+    if($localPointer.version -cne '1.0.1'){throw 'Changed module publication did not advance the local PC cache pointer.'}
 
     $moduleRoot=Join-Path $publishedRoot 'AutoUpdate'
     $pointer=Get-Content -Raw -LiteralPath (Join-Path $moduleRoot 'current.json') | ConvertFrom-Json
     if($pointer.version -cne '1.0.1' -or -not (Test-Path -LiteralPath (Join-Path $moduleRoot 'versions\1.0.0') -PathType Container)){
         throw 'Module activation did not advance atomically while preserving the prior immutable version.'
     }
-    Write-Output 'PASS: unchanged sources keep their version; changed AutoUpdate sources publish and activate the next patch without removing the prior version.'
+    Write-Output 'PASS: unchanged sources keep their version; changed AutoUpdate sources publish, activate in the local PC cache, and preserve prior versions.'
 }finally{
     $full=[IO.Path]::GetFullPath($tempRoot)
     $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
