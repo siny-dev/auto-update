@@ -10,6 +10,7 @@ $workerSource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\tools\update-r
 $policyReader=Join-Path $PSScriptRoot '..\tools\read-update-policy.ps1'
 Copy-Item -LiteralPath $policyReader -Destination (Join-Path $tools 'read-update-policy.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\shared-cycle-lock.ps1') -Destination (Join-Path $tools 'shared-cycle-lock.ps1')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\guard-local-package-version.ps1') -Destination (Join-Path $tools 'guard-local-package-version.ps1')
 $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Local\AuWorkerHotReloadTestWorker').Replace('Local\AutoUpdateRegisteredApps','Local\AuWorkerHotReloadTestCycle')
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
@@ -84,6 +85,7 @@ try{
     $handoffRoot=Join-Path $temp 'handoff';$handoffTools=Join-Path $handoffRoot 'tools';[void][IO.Directory]::CreateDirectory($handoffTools)
     Copy-Item -LiteralPath $policyReader -Destination (Join-Path $handoffTools 'read-update-policy.ps1')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\shared-cycle-lock.ps1') -Destination (Join-Path $handoffTools 'shared-cycle-lock.ps1')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\guard-local-package-version.ps1') -Destination (Join-Path $handoffTools 'guard-local-package-version.ps1')
     $handoffWorker=Join-Path $handoffTools 'update-registered-apps.ps1';$marker=Join-Path $temp 'runner-restart-requested.txt'
     $handoffSource=$workerSource.Replace('Start-Sleep -Milliseconds $waitMilliseconds','Start-Sleep -Milliseconds 500')
     $startLine='        Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null'
