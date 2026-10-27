@@ -37,6 +37,24 @@ try{
         $unicodeResult=([string]::Join([Environment]::NewLine,@($unicodeOutput))|ConvertFrom-Json)
         Assert ($unicodeResult.status -eq 'built' -and $unicodeResult.app_id -eq 'unicode-build') 'Windows PowerShell did not preserve a UTF-8 Korean payload path.'
     }
+    $previousRecipePath=$recipePath;$previousPackageRoot=$packageRoot
+    try{
+        $versionedPayloadRoot=Join-Path $testRoot 'versioned-payload';$versionedPackageRoot=Join-Path $testRoot 'versioned-outbox';$versionedRecipePath=Join-Path $testRoot 'versioned-build.json'
+        [void][IO.Directory]::CreateDirectory($versionedPayloadRoot)
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'notice.txt'),'first',[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'version.json'),'{"version":"v2.0.0"}',[Text.UTF8Encoding]::new($false))
+        $versionedRecipe=[ordered]@{app_id='metadata-build';version_seed='2.0.0';platform='windows';architecture='any';minimum_engine='0.1.0';mode='live';payload_root=$versionedPayloadRoot;version_metadata=[ordered]@{path='version.json';field='version';prefix='v'};files=@(@{path='notice.txt';kind='data'},@{path='version.json';kind='data'})}
+        [IO.File]::WriteAllText($versionedRecipePath,($versionedRecipe|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+        $recipePath=$versionedRecipePath;$packageRoot=$versionedPackageRoot
+        $metadataFirst=Invoke-Build $null;Assert ($metadataFirst.status -eq 'built' -and $metadataFirst.version -eq '2.0.0') 'version_metadata did not allow a matching embedded app version'
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'notice.txt'),'changed',[Text.UTF8Encoding]::new($false))
+        $mismatchBlocked=$false;try{$null=Invoke-Build $null}catch{$mismatchBlocked=$true}
+        Assert $mismatchBlocked 'version_metadata mismatch was not blocked'
+        Assert (-not (Test-Path -LiteralPath (Join-Path $versionedPackageRoot '2.0.1'))) 'version_metadata mismatch created a package'
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'version.json'),'{"version":"v2.0.1"}',[Text.UTF8Encoding]::new($false))
+        $metadataNext=Invoke-Build $null;Assert ($metadataNext.status -eq 'built' -and $metadataNext.version -eq '2.0.1') 'version_metadata did not allow a corrected embedded version'
+    }finally{$recipePath=$previousRecipePath;$packageRoot=$previousPackageRoot}
+    'PASS: version_metadata accepts matching app versions and refuses to create a package when embedded metadata disagrees'
     'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, rebuilds after package loss, and advances unchanged local package content beyond newer remote versions'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
