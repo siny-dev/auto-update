@@ -17,10 +17,10 @@ if(Test-Path -LiteralPath $pointerPath -PathType Leaf){
     $manifestPath=Join-Path $packageRoot 'module.json'
     if(Test-Path -LiteralPath $manifestPath -PathType Leaf){
         $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
-        $unchanged=$manifest.module_id -ceq 'AutoUpdate' -and [int]$manifest.api_major -eq 1 -and @($manifest.files).Count -eq 3
+        $unchanged=$manifest.module_id -ceq 'AutoUpdate' -and [int]$manifest.api_major -eq 1 -and @($manifest.files).Count -eq 4
         foreach($entry in @($manifest.files)){
             $relative=[string]$entry.path
-            if($relative -notin @('tools/autoupdate.ps1','tools/resolve_modules.py','source/AutoUpdate.Core.psm1')){$unchanged=$false;break}
+            if($relative -notin @('tools/autoupdate.ps1','tools/resolve_modules.py','tools/shared_app.py','source/AutoUpdate.Core.psm1')){$unchanged=$false;break}
             $source=Join-Path $root ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))
             $published=Join-Path (Join-Path $packageRoot 'payload') ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))
             if(-not (Test-Path -LiteralPath $source -PathType Leaf) -or -not (Test-Path -LiteralPath $published -PathType Leaf) -or
@@ -55,7 +55,7 @@ if($unchanged){
 $work=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-module-package-'+[guid]::NewGuid().ToString('N'))
 $sourceRoot=Join-Path $work 'source';$package=Join-Path $work 'package'
 try{
-    foreach($relative in @('tools/autoupdate.ps1','tools/resolve_modules.py','source/AutoUpdate.Core.psm1')){
+    foreach($relative in @('tools/autoupdate.ps1','tools/resolve_modules.py','tools/shared_app.py','source/AutoUpdate.Core.psm1')){
         $source=Join-Path $root ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))
         if(-not (Test-Path -LiteralPath $source -PathType Leaf)){throw "AutoUpdate module source is missing: $relative"}
         $target=Join-Path $sourceRoot ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))

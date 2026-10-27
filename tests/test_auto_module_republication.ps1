@@ -45,6 +45,7 @@ try{
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\build-module-package.ps1') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\autoupdate.ps1') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\resolve_modules.py') -Destination $fixtureTools
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\shared_app.py') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'source\AutoUpdate.Core.psm1') -Destination $fixtureSource
 
     $syncScript=Join-Path $fixtureTools 'sync-core-module.ps1'
@@ -54,6 +55,12 @@ try{
     }
     $localPointer=Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'modules\AutoUpdate\current.json')|ConvertFrom-Json
     if($localPointer.version -cne '1.0.0'){throw 'Initial module publication did not update the local PC cache pointer.'}
+    $initialManifest=Get-Content -Raw -LiteralPath (Join-Path $publishedRoot 'AutoUpdate\versions\1.0.0\module.json')|ConvertFrom-Json
+    $helperEntry=@($initialManifest.files|Where-Object { $_.path -ceq 'tools/shared_app.py' })
+    $helperPayload=Join-Path $publishedRoot 'AutoUpdate\versions\1.0.0\payload\tools\shared_app.py'
+    if(@($initialManifest.files).Count -ne 4 -or $helperEntry.Count -ne 1 -or -not (Test-Path -LiteralPath $helperPayload -PathType Leaf) -or (Get-FileHash -LiteralPath $helperPayload -Algorithm SHA256).Hash -ine [string]$helperEntry[0].sha256){
+        throw 'Initial AutoUpdate module package did not preserve and validate the shared app runner helper.'
+    }
 
     $unchanged=Invoke-FixtureModuleSync $syncScript $stateRoot $publishedRoot
     if($unchanged.status -cne 'unchanged' -or $unchanged.version -cne '1.0.0' -or $unchanged.cache_status -cne 'already-cached'){
@@ -74,7 +81,7 @@ try{
     if($pointer.version -cne '1.0.1' -or -not (Test-Path -LiteralPath (Join-Path $moduleRoot 'versions\1.0.0') -PathType Container)){
         throw 'Module activation did not advance atomically while preserving the prior immutable version.'
     }
-    Write-Output 'PASS: unchanged sources keep their version; changed AutoUpdate sources publish, activate in the local PC cache, and preserve prior versions.'
+    Write-Output 'PASS: helper payload/hash is retained; unchanged sources keep their version; changed AutoUpdate sources publish, activate in the local PC cache, and preserve prior versions.'
 }finally{
     $full=[IO.Path]::GetFullPath($tempRoot)
     $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
