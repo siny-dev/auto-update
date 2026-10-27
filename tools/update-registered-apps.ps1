@@ -9,6 +9,7 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'read-update-policy.ps1')
 . (Join-Path $PSScriptRoot 'shared-cycle-lock.ps1')
+. (Join-Path $PSScriptRoot 'guard-local-package-version.ps1')
 $sourceModule=Join-Path $root 'source\AutoUpdate.Core.psm1'
 $logRoot=Join-Path $StateRoot 'logs';[void][IO.Directory]::CreateDirectory($logRoot)
 $logPath=Join-Path $logRoot 'app-updates.jsonl'
@@ -84,12 +85,17 @@ function Invoke-UpdateCycle{
             }
             $localPackage=Get-AuLatestLocalPackage -PackageRoot $localPackageRoot -AppId $app.app_id -Architecture $app.architecture
             if($localPackage){
-                try{
-                    $publish=Publish-AuLocalPackage -Owner $app.owner -Repository $app.repository -AppId $app.app_id -PackageRoot $localPackage.Path -Architecture $app.architecture
-                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$publish.Status;Version=$publish.Version;Message=$publish.Message})
-                }catch{
-                    $publishMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
-                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='publish-failed';Version=$localPackage.Manifest.version;Message=$publishMessage})
+                $versionGuard=Test-AuLocalPackageVersionMetadata -PackageRoot $localPackage.Path -BuildRecipePath $buildRecipe
+                if(-not $versionGuard.Valid){
+                    Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$versionGuard.Status;Version=$localPackage.Manifest.version;Message=$versionGuard.Message})
+                }else{
+                    try{
+                        $publish=Publish-AuLocalPackage -Owner $app.owner -Repository $app.repository -AppId $app.app_id -PackageRoot $localPackage.Path -Architecture $app.architecture
+                        Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$publish.Status;Version=$publish.Version;Message=$publish.Message})
+                    }catch{
+                        $publishMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
+                        Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status='publish-failed';Version=$localPackage.Manifest.version;Message=$publishMessage})
+                    }
                 }
             }
             try{
