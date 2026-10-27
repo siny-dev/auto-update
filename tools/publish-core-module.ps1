@@ -11,7 +11,7 @@ $package=Join-Path $work 'package'
 [void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
 [void][IO.Directory]::CreateDirectory((Join-Path $source 'source'))
 try{
-    foreach($relative in @('tools/autoupdate.ps1','tools/resolve_modules.py','source/AutoUpdate.Core.psm1')){
+    foreach($relative in @('tools/autoupdate.ps1','tools/resolve_modules.py','tools/shared_app.py','source/AutoUpdate.Core.psm1')){
         $from=Join-Path $root ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))
         if(-not (Test-Path -LiteralPath $from -PathType Leaf)){throw "AutoUpdate module source is missing: $relative"}
         $to=Join-Path $source ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))

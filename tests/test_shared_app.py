@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_test_dir = Path(__file__).resolve().parent
+_tools_dir = _test_dir.parent / "tools"
+sys.path.insert(0, str(_tools_dir if (_tools_dir / "shared_app.py").is_file() else _test_dir))
 from shared_app import SharedAppError, resolve_shared_app
 
 
