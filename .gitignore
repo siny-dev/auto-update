@@ -19,3 +19,7 @@ local.ini
 *.dll
 *.obj
 *.pdb
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
