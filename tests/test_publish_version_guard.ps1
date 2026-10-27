@@ -34,18 +34,17 @@ try{
     $unconfigured=Test-AuLocalPackageVersionMetadata -PackageRoot $good -BuildRecipePath $recipePath
     Assert ($unconfigured.Valid -and $unconfigured.Status -eq 'version-metadata-not-configured') 'legacy app without a metadata contract was not allowed'
 
-    $realRecipe='\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\apps\workboard\build.json'
-    $realRoot='\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\apps\workboard'
-    foreach($version in @('1.0.48','1.0.49')){
-        $realPackage=Join-Path $realRoot $version
-        $realResult=Test-AuLocalPackageVersionMetadata -PackageRoot $realPackage -BuildRecipePath $realRecipe
-        Assert (-not $realResult.Valid -and $realResult.Status -eq 'publish-held-version-metadata-mismatch') ("existing Workboard package $version was not held: "+$realResult.Message)
-    }
+    $recipe.version_metadata=[ordered]@{path='version.json';field='version';prefix='v'}
+    [IO.File]::WriteAllText($recipePath,($recipe|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    $stale48=New-FixturePackage '1.0.48' 'v1.0.47'
+    $stale48Check=Test-AuLocalPackageVersionMetadata -PackageRoot $stale48 -BuildRecipePath $recipePath
+    Assert (-not $stale48Check.Valid -and $stale48Check.Status -eq 'publish-held-version-metadata-mismatch') 'representative Workboard 1.0.48 package mismatch was not held'
+    Assert (-not $staleCheck.Valid -and $staleCheck.Status -eq 'publish-held-version-metadata-mismatch') 'representative Workboard 1.0.49 package mismatch was not held'
     $worker=Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\tools\update-registered-apps.ps1')
     $guardAt=$worker.IndexOf('Test-AuLocalPackageVersionMetadata',[StringComparison]::Ordinal)
     $publishAt=$worker.IndexOf('Publish-AuLocalPackage -Owner',[StringComparison]::Ordinal)
     Assert ($guardAt -ge 0 -and $publishAt -gt $guardAt -and $worker.Contains('if(-not $versionGuard.Valid)')) 'registered-app worker does not hold mismatched packages before publish'
-    'PASS: matching package allowed; mismatched, malformed, unhashed, duplicate, and traversal metadata denied; existing Workboard .48/.49 denied; worker guard precedes publisher.'
+    'PASS: matching package allowed; mismatched, malformed, unhashed, duplicate, and traversal metadata denied; representative .48/.49 mismatch fixtures denied; worker guard precedes publisher.'
 }finally{
     $resolved=[IO.Path]::GetFullPath($testRoot)
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path -Leaf $resolved).StartsWith('AutoUpdate-publish-guard-test-')){throw 'refusing unsafe test cleanup'}
