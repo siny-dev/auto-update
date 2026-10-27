@@ -44,6 +44,7 @@ try{
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\sync-core-module.ps1') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\build-module-package.ps1') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\autoupdate.ps1') -Destination $fixtureTools
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\resolve_modules.py') -Destination $fixtureTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'source\AutoUpdate.Core.psm1') -Destination $fixtureSource
 
     $syncScript=Join-Path $fixtureTools 'sync-core-module.ps1'

@@ -49,6 +49,7 @@ function Publish-AuLocalModulePackage([string]`$PackageRoot,[string]`$ModuleSour
 "@
     [IO.File]::WriteAllText((Join-Path $moduleRepo 'source\AutoUpdate.Core.psm1'),$sourceCode,[Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $moduleRepo 'tools\autoupdate.ps1'),'# fixture',[Text.UTF8Encoding]::new($false))
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\resolve_modules.py') -Destination $moduleTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\build-module-package.ps1') -Destination $moduleTools
     $moduleBuilder=Join-Path $moduleTools 'build-module-package.ps1'
     & $moduleBuilder -ModuleId TestModule -Version 1.0.0 -ApiMajor 1 -SourceRoot $moduleSource -OutputRoot $moduleOutput | Out-Null
