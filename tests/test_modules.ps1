@@ -43,6 +43,7 @@ $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sour
     $appV1=Write-AppManifest 1
     $resolved=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
     Assert ($resolved.modules[0].delivery_level -eq 'L1' -and $resolved.modules[0].runtime_state -eq 'not-reported') 'Module resolution claimed activation before the app reported loading it.'
+    Assert ($resolved.modules[0].source_state -eq 'available' -and $null -eq $resolved.modules[0].source_error_code) 'Compatible source classification is missing.'
     $loadedStatus=Set-AuModuleRuntimeStatus -StateRoot $state -AppId module-test-app -ModuleId SharedLib -Version 1.0.0 -RuntimeState loaded
     Assert ($loadedStatus.delivery_level -eq 'L2') 'Loaded module status did not report L2.'
     $activeStatus=Set-AuModuleRuntimeStatus -StateRoot $state -AppId module-test-app -ModuleId SharedLib -Version 1.0.0 -RuntimeState active
@@ -53,6 +54,7 @@ $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sour
     Assert (Test-Path -LiteralPath (Join-Path $resolved.modules[0].module_path 'module.psm1')) 'Resolved cache path does not contain module payload.'
     $repeat=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
     Assert ($repeat.modules[0].source_status -eq 'already-cached') 'A second resolve did not reuse the common PC cache.'
+    Assert ($repeat.modules[0].source_state -eq 'available' -and $null -eq $repeat.modules[0].source_error_code) 'Cached compatible source classification is missing.'
 
     $p110=Build-Module '1.1.0' 1 'function Get-SharedValue { "one point one" }'
     Assert ((Publish-AuLocalModulePackage -PackageRoot $p110 -ModuleSourceRoot $sourceRoot -ModuleId SharedLib).Status -eq 'published') 'Compatible update did not publish.'
@@ -60,6 +62,12 @@ $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sour
     Assert ((Publish-AuLocalModulePackage -PackageRoot $p200 -ModuleSourceRoot $sourceRoot -ModuleId SharedLib).Status -eq 'published') 'New API major did not publish.'
     $oldApp=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
     Assert ($oldApp.modules[0].version -eq '1.1.0' -and $oldApp.modules[0].api_major -eq 1) 'New API major displaced the newest compatible module.'
+    Assert ($oldApp.modules[0].source_state -eq 'available') 'Compatible API history was not classified as available.'
+    Remove-Item -LiteralPath (Join-Path $sourceRoot 'SharedLib/versions/1.0.0') -Recurse -Force
+    Remove-Item -LiteralPath (Join-Path $sourceRoot 'SharedLib/versions/1.1.0') -Recurse -Force
+    $apiFallback=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
+    Assert ($apiFallback.modules[0].version -eq '1.1.0' -and $apiFallback.modules[0].source_status -eq 'offline-cache') 'API mismatch did not preserve verified cache.'
+    Assert ($apiFallback.modules[0].source_state -eq 'incompatible' -and $apiFallback.modules[0].source_error_code -eq 'api_incompatible') 'API mismatch classification is missing.'
     $appV2=Write-AppManifest 2
     $newApp=Resolve-AuAppModules -AppManifestPath $appV2 -ModuleSourceRoot $sourceRoot -StateRoot $state
     Assert ($newApp.modules[0].version -eq '2.0.0' -and $newApp.modules[0].api_major -eq 2) 'New API client did not resolve the new module major.'
@@ -78,6 +86,14 @@ $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sour
     $conflict=Build-Module '2.0.0' 2 'function Get-SharedValue { "different same version" }'
     $conflictResult=Publish-AuLocalModulePackage -PackageRoot $conflict -ModuleSourceRoot $sourceRoot -ModuleId SharedLib
     Assert ($conflictResult.Status -eq 'conflict') 'Different contents under a published version were not reported as a conflict.'
+    $conflictSourceVersion=Join-Path $sourceRoot 'SharedLib/versions/2.0.0'
+    Get-ChildItem -LiteralPath $conflict -Force|ForEach-Object{Copy-Item -LiteralPath $_.FullName -Destination $conflictSourceVersion -Recurse -Force}
+    $sourcePointerPath=Join-Path $sourceRoot 'SharedLib/current.json'
+    $sourcePointerDoc=Get-Content -Raw -LiteralPath $sourcePointerPath|ConvertFrom-Json
+    $sourcePointerDoc.manifest_sha256=Get-AuFileSha256 (Join-Path $conflictSourceVersion 'module.json')
+    [IO.File]::WriteAllText($sourcePointerPath,($sourcePointerDoc|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    $sourceConflict=Resolve-AuAppModules -AppManifestPath $appV2 -ModuleSourceRoot $sourceRoot -StateRoot $state
+    Assert ($sourceConflict.modules[0].source_status -eq 'conflict' -and $sourceConflict.modules[0].source_state -eq 'install_conflict' -and $sourceConflict.modules[0].source_error_code -eq 'install_conflict') 'Resolver install conflict classification is missing.'
     Assert ((Get-AuCurrentModule -StateRoot $state -ModuleId SharedLib).Version -eq '2.0.0') 'Same-version conflict affected the cached active pointer.'
 
     $cliPackage=Build-Module '3.0.0' 3 'function Get-SharedValue { "cli" }' 'CliLib'
@@ -101,6 +117,10 @@ $publish=Publish-AuLocalModulePackage -PackageRoot $p100 -ModuleSourceRoot $sour
     $sourcePointer=Join-Path $sourceRoot 'SharedLib/current.json';Remove-Item -LiteralPath $sourcePointer -Force
     $offline=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
     Assert ($offline.modules[0].source_status -eq 'offline-cache' -and $offline.modules[0].version -eq '1.1.0') 'Unavailable shared storage did not fall back to the newest verified compatible PC cache.'
+    Assert ($offline.modules[0].source_state -eq 'unavailable' -and $offline.modules[0].source_error_code -eq 'source_unavailable') 'Missing source pointer classification is missing.'
+    [IO.File]::WriteAllText($sourcePointer,'{broken',[Text.UTF8Encoding]::new($false))
+    $badPointer=Resolve-AuAppModules -AppManifestPath $appV1 -ModuleSourceRoot $sourceRoot -StateRoot $state
+    Assert ($badPointer.modules[0].source_state -eq 'invalid' -and $badPointer.modules[0].source_error_code -eq 'invalid_pointer') 'Invalid pointer classification is missing.'
     'PASS: immutable local publishing, shared per-PC cache reuse, API compatibility, failed-install rollback, hash/conflict rejection, CLI, and offline cache resolution'
 }finally{
     Remove-Module AutoUpdate.Core -ErrorAction SilentlyContinue
