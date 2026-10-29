@@ -1053,32 +1053,104 @@ function Publish-AuLocalModulePackage {
     finally{$handle.Dispose()}
 }
 
+function New-AuModuleSourceFailure {
+    param([Parameter(Mandatory=$true)][string]$State,[Parameter(Mandatory=$true)][string]$Code,[Parameter(Mandatory=$true)][string]$Message)
+    $exception=[InvalidOperationException]::new($Message)
+    $exception.Data['source_state']=$State
+    $exception.Data['source_error_code']=$Code
+    return $exception
+}
+
+function Get-AuModuleSourceFailureData {
+    param([Parameter(Mandatory=$true)][System.Exception]$Exception)
+    $current=$Exception
+    while($current){
+        if($current.Data -and $current.Data.Contains('source_state')){
+            return [pscustomobject]@{State=[string]$current.Data['source_state'];Code=[string]$current.Data['source_error_code']}
+        }
+        $current=$current.InnerException
+    }
+    return $null
+}
+
 function Update-AuModuleFromLocalSource {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$ModuleSourceRoot,[Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[Parameter(Mandatory=$true)][int]$ApiMajor)
     if($ApiMajor -lt 1){throw 'Required module API major must be positive.'}
-    $moduleRoot=Get-AuContainedPath $ModuleSourceRoot $ModuleId
+    try{$moduleRoot=Get-AuContainedPath $ModuleSourceRoot $ModuleId}catch{throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'The local module source cannot be reached.')}
+    if(-not (Test-Path -LiteralPath $moduleRoot -PathType Container)){throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'The local module source is unavailable.')}
     $pointerPath=Join-Path $moduleRoot 'current.json'
-    if(-not (Test-Path -LiteralPath $pointerPath -PathType Leaf)){throw "Local module source has no current pointer: $ModuleId"}
-    $pointer=Get-Content -Raw -LiteralPath $pointerPath|ConvertFrom-Json
-    if($pointer.schema -ne 1 -or $pointer.module_id -cne $ModuleId -or [string]$pointer.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$pointer.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Local module source pointer is invalid.'}
+    try{
+        if(-not (Test-Path -LiteralPath $pointerPath -PathType Leaf)){throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' "Local module source has no current pointer: $ModuleId")}
+        $pointerText=[IO.File]::ReadAllText($pointerPath)
+    }catch{
+        $failure=Get-AuModuleSourceFailureData $_.Exception
+        if($failure){throw}
+        throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'The local module source pointer cannot be read.')
+    }
+    try{$pointer=$pointerText|ConvertFrom-Json -ErrorAction Stop}catch{throw (New-AuModuleSourceFailure 'invalid' 'invalid_pointer' 'Local module source pointer is invalid JSON.')}
+    if($pointer.schema -ne 1 -or $pointer.module_id -cne $ModuleId -or [string]$pointer.version -notmatch '^\d+\.\d+\.\d+$' -or [string]$pointer.manifest_sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or [string]$pointer.api_major -notmatch '^[1-9]\d*$'){
+        throw (New-AuModuleSourceFailure 'invalid' 'invalid_pointer' 'Local module source pointer is invalid.')
+    }
     $publishedVersion=[version]$pointer.version
     $versionsRoot=Get-AuContainedPath $moduleRoot 'versions'
-    $candidates=[Collections.Generic.List[object]]::new()
-    foreach($directory in Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction SilentlyContinue){
+    $pointedPath=Get-AuContainedPath $versionsRoot ([string]$pointer.version)
+    if(-not (Test-Path -LiteralPath $pointedPath -PathType Container)){throw (New-AuModuleSourceFailure 'invalid' 'missing_manifest' 'The source pointer references a missing module version.')}
+    try{$pointedInfo=Get-AuModuleManifestFromPackage -PackageRoot $pointedPath -ModuleId $ModuleId}catch{
+        $message=$_.Exception.Message
+        if($message -like '*requires a newer AutoUpdate version*'){
+            throw (New-AuModuleSourceFailure 'incompatible' 'minimum_engine' $message)
+        }
+        if($message -like '*hash mismatch*'){$code='payload_hash_mismatch'}
+        elseif($message -like '*size mismatch*'){$code='payload_size_mismatch'}
+        elseif($message -like '*cannot be read*' -or $message -like '*access*denied*'){
+            throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'The pointed source package cannot be read.')
+        }else{$code='invalid_manifest'}
+        throw (New-AuModuleSourceFailure 'invalid' $code $message)
+    }
+    if([string]$pointedInfo.Manifest.version -cne [string]$pointer.version -or
+       $pointedInfo.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant() -or
+       [int]$pointedInfo.Manifest.api_major -ne [int]$pointer.api_major){
+        throw (New-AuModuleSourceFailure 'invalid' 'pointer_manifest_mismatch' 'The source pointer does not match its module manifest.')
+    }
+    try{$directories=@(Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction Stop)}catch{
+        throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'Published module versions cannot be read.')
+    }
+    $candidates=[Collections.Generic.List[object]]::new();$minimumEngineBlocked=$false
+    foreach($directory in $directories){
         if($directory.Name -notmatch '^\d+\.\d+\.\d+$' -or [version]$directory.Name -gt $publishedVersion){continue}
         try{
             $info=Get-AuModuleManifestFromPackage -PackageRoot $directory.FullName -ModuleId $ModuleId
             if([string]$info.Manifest.version -cne $directory.Name){throw 'Published module directory does not match its manifest version.'}
-            if($directory.Name -ceq [string]$pointer.version -and ($info.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant() -or [int]$info.Manifest.api_major -ne [int]$pointer.api_major)){throw 'Published pointer does not match current module manifest.'}
+            if($directory.Name -ceq [string]$pointer.version -and ($info.ManifestHash -cne ([string]$pointer.manifest_sha256).ToLowerInvariant() -or [int]$info.Manifest.api_major -ne [int]$pointer.api_major)){
+                throw 'Published pointer does not match current module manifest.'
+            }
             if([int]$info.Manifest.api_major -eq $ApiMajor){$candidates.Add([pscustomobject]@{Version=$directory.Name;Path=$directory.FullName;Manifest=$info.Manifest;ManifestHash=$info.ManifestHash})}
         }catch{
-            if($directory.Name -ceq [string]$pointer.version){throw}
+            if($directory.Name -ceq [string]$pointer.version){
+                $message=$_.Exception.Message
+                if($message -like '*requires a newer AutoUpdate version*'){throw (New-AuModuleSourceFailure 'incompatible' 'minimum_engine' $message)}
+                if($message -like '*hash mismatch*'){$code='payload_hash_mismatch'}else{$code='invalid_manifest'}
+                throw (New-AuModuleSourceFailure 'invalid' $code $message)
+            }
+            if($_.Exception.Message -like '*requires a newer AutoUpdate version*'){$minimumEngineBlocked=$true}
         }
     }
     $candidate=@($candidates|Sort-Object { [version]$_.Version } -Descending|Select-Object -First 1)
-    if($candidate.Count -eq 0){throw "No valid local module version supports API ${ApiMajor}: $ModuleId"}
-    return Install-AuModulePackage -PackageRoot $candidate[0].Path -StateRoot $StateRoot -ModuleId $ModuleId
+    if($candidate.Count -eq 0){
+        if($minimumEngineBlocked){throw (New-AuModuleSourceFailure 'incompatible' 'minimum_engine' 'Compatible source modules require a newer AutoUpdate version.')}
+        throw (New-AuModuleSourceFailure 'incompatible' 'api_incompatible' "No valid local module version supports API ${ApiMajor}: $ModuleId")
+    }
+    try{$installed=Install-AuModulePackage -PackageRoot $candidate[0].Path -StateRoot $StateRoot -ModuleId $ModuleId}catch{
+        throw (New-AuModuleSourceFailure 'available' 'install_failed' $_.Exception.Message)
+    }
+    if($installed.Status -eq 'conflict'){
+        $state='install_conflict';$code='install_conflict';$message=[string]$installed.Message
+    }else{$state='available';$code=$null;$message=$null}
+    $installed|Add-Member -NotePropertyName SourceState -NotePropertyValue $state -Force
+    $installed|Add-Member -NotePropertyName SourceErrorCode -NotePropertyValue $code -Force
+    $installed|Add-Member -NotePropertyName SourceError -NotePropertyValue $message -Force
+    return $installed
 }
 
 function Resolve-AuAppModules {
@@ -1094,18 +1166,23 @@ function Resolve-AuAppModules {
         if($moduleId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or $apiMajor -lt 1){throw 'App module requirement is invalid.'}
         if($seen.ContainsKey($moduleId.ToLowerInvariant())){throw 'App module list contains a duplicate module ID.'}
         $seen[$moduleId.ToLowerInvariant()]=$true
-        $sourceStatus='offline-cache';$sourceError=$null
+        $sourceStatus='offline-cache';$sourceState='unavailable';$sourceErrorCode='source_unavailable';$sourceError=$null
         try{
             $update=Update-AuModuleFromLocalSource -ModuleSourceRoot $ModuleSourceRoot -StateRoot $StateRoot -ModuleId $moduleId -ApiMajor $apiMajor
-            $sourceStatus=[string]$update.Status
-        }catch{$sourceError=$_.Exception.Message}
+            $sourceStatus=[string]$update.Status;$sourceState=[string]$update.SourceState;$sourceErrorCode=$update.SourceErrorCode;$sourceError=$update.SourceError
+        }catch{
+            $sourceError=$_.Exception.Message
+            $failure=Get-AuModuleSourceFailureData $_.Exception
+            if($failure){$sourceState=$failure.State;$sourceErrorCode=$failure.Code}
+            else{$sourceState='invalid';$sourceErrorCode='resolution_failed'}
+        }
         $cached=@(Get-AuCachedModuleVersions -StateRoot $StateRoot -ModuleId $moduleId -ApiMajor $apiMajor)
         if($cached.Count -eq 0){
             if($sourceError){throw "Required module $moduleId API $apiMajor is unavailable. $sourceError"}
             throw "Required module $moduleId API $apiMajor is not cached."
         }
         $chosen=$cached[0]
-        $resolved.Add([pscustomobject]@{module_id=$moduleId;version=$chosen.Version;api_major=$chosen.ApiMajor;activation_mode=$chosen.ActivationMode;module_path=$chosen.Path;verified=$true;delivery_level='L1';runtime_state='not-reported';source_status=$sourceStatus;source_error=$sourceError})
+        $resolved.Add([pscustomobject]@{module_id=$moduleId;version=$chosen.Version;api_major=$chosen.ApiMajor;activation_mode=$chosen.ActivationMode;module_path=$chosen.Path;verified=$true;delivery_level='L1';runtime_state='not-reported';source_status=$sourceStatus;source_error=$sourceError;source_state=$sourceState;source_error_code=$sourceErrorCode})
     }
     return [pscustomobject]@{schema=1;status='ready';app_id=[string]$app.app_id;modules=@($resolved)}
 }

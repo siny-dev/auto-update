@@ -33,6 +33,35 @@ class ResolverError(Exception):
     """A safe-to-report resolver failure."""
 
 
+class ResolverReadError(ResolverError):
+    """A file read failed; `missing` distinguishes absent files from I/O loss."""
+
+    def __init__(self, message: str, *, missing: bool = False) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+
+class ModuleCompatibilityError(ResolverError):
+    """A valid module cannot run on this AutoUpdate engine version."""
+
+
+class PayloadIntegrityError(ResolverError):
+    """A module payload does not match its declared immutable contents."""
+
+    def __init__(self, message: str, error_code: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class SourceResolutionError(ResolverError):
+    """A source pointer failure with a stable, schema-compatible classification."""
+
+    def __init__(self, message: str, source_state: str, error_code: str) -> None:
+        super().__init__(message)
+        self.source_state = source_state
+        self.source_error_code = error_code
+
+
 def _no_duplicate_keys(pairs: Iterable[Tuple[str, Any]]) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     for key, value in pairs:
@@ -46,7 +75,9 @@ def read_json(path: Path) -> Dict[str, Any]:
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise ResolverError("A required JSON file cannot be read.") from exc
+        raise ResolverReadError(
+            "A required JSON file cannot be read.", missing=isinstance(exc, FileNotFoundError)
+        ) from exc
     if len(raw) > MAX_JSON_BYTES:
         raise ResolverError("A JSON file exceeds the size limit.")
     try:
@@ -117,7 +148,9 @@ def sha256_file(path: Path) -> str:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
     except OSError as exc:
-        raise ResolverError("A module payload cannot be read.") from exc
+        raise ResolverReadError(
+            "A module payload cannot be read.", missing=isinstance(exc, FileNotFoundError)
+        ) from exc
     return digest.hexdigest()
 
 
@@ -136,7 +169,7 @@ def validate_manifest(package_root: Path, module_id: str, engine_version: Tuple[
         raise ResolverError("Invalid module API major.")
     minimum = parse_version(manifest.get("minimum_engine"), "minimum AutoUpdate version")
     if engine_version < minimum:
-        raise ResolverError("The module requires a newer AutoUpdate engine.")
+        raise ModuleCompatibilityError("The module requires a newer AutoUpdate engine.")
     if manifest.get("publisher_policy") != "local-share-v1":
         raise ResolverError("Unsupported module publisher policy.")
     activation = manifest.get("activation_mode")
@@ -171,32 +204,53 @@ def validate_manifest(package_root: Path, module_id: str, engine_version: Tuple[
             raise ResolverError("Invalid module payload hash.")
         payload = contained_path(package_root, source_path)
         if not payload.is_file():
-            raise ResolverError("A module payload is missing.")
+            raise PayloadIntegrityError("A module payload is missing.", "missing_payload")
         try:
             actual_size = payload.stat().st_size
         except OSError as exc:
             raise ResolverError("A module payload cannot be inspected.") from exc
-        if actual_size != size or sha256_file(payload) != entry["sha256"].lower():
-            raise ResolverError("A module payload failed size or SHA-256 verification.")
+        if actual_size != size:
+            raise PayloadIntegrityError("A module payload failed size verification.", "payload_size_mismatch")
+        if sha256_file(payload) != entry["sha256"].lower():
+            raise PayloadIntegrityError("A module payload failed SHA-256 verification.", "payload_hash_mismatch")
     return manifest, sha256_file(manifest_path)
 
 
 def validate_source_pointer(module_root: Path, module_id: str, engine_version: Tuple[int, int, int]) -> Tuple[Dict[str, Any], Path]:
-    pointer = read_json(contained_path(module_root, "current.json"))
+    try:
+        pointer = read_json(contained_path(module_root, "current.json"))
+    except ResolverReadError as exc:
+        raise SourceResolutionError(str(exc), "unavailable", "source_unavailable") from exc
+    except ResolverError as exc:
+        raise SourceResolutionError(str(exc), "invalid", "invalid_pointer") from exc
     if pointer.get("schema") != 1 or pointer.get("module_id") != module_id:
-        raise ResolverError("Invalid module source pointer.")
+        raise SourceResolutionError("Invalid module source pointer.", "invalid", "invalid_pointer")
     version = pointer.get("version")
-    version_parts = parse_version(version, "module source version")
+    try:
+        version_parts = parse_version(version, "module source version")
+    except ResolverError as exc:
+        raise SourceResolutionError(str(exc), "invalid", "invalid_pointer") from exc
     if not isinstance(pointer.get("manifest_sha256"), str) or not SHA256_RE.fullmatch(pointer["manifest_sha256"]):
-        raise ResolverError("Invalid module source pointer hash.")
+        raise SourceResolutionError("Invalid module source pointer hash.", "invalid", "invalid_pointer")
     if isinstance(pointer.get("api_major"), bool) or not isinstance(pointer.get("api_major"), int) or pointer["api_major"] < 1:
-        raise ResolverError("Invalid module source pointer API.")
-    package_root = contained_path(contained_path(module_root, "versions"), version)
-    manifest, manifest_hash = validate_manifest(package_root, module_id, engine_version)
+        raise SourceResolutionError("Invalid module source pointer API.", "invalid", "invalid_pointer")
+    try:
+        package_root = contained_path(contained_path(module_root, "versions"), version)
+        manifest, manifest_hash = validate_manifest(package_root, module_id, engine_version)
+    except ModuleCompatibilityError as exc:
+        raise SourceResolutionError(str(exc), "incompatible", "minimum_engine") from exc
+    except PayloadIntegrityError as exc:
+        raise SourceResolutionError(str(exc), "invalid", exc.error_code) from exc
+    except ResolverReadError as exc:
+        if exc.missing:
+            raise SourceResolutionError("The pointed module manifest is missing.", "invalid", "missing_manifest") from exc
+        raise SourceResolutionError(str(exc), "unavailable", "source_unavailable") from exc
+    except ResolverError as exc:
+        raise SourceResolutionError(str(exc), "invalid", "invalid_manifest") from exc
     if manifest.get("version") != ".".join(str(part) for part in version_parts):
-        raise ResolverError("Module source directory and manifest versions differ.")
+        raise SourceResolutionError("Module source directory and manifest versions differ.", "invalid", "invalid_manifest")
     if manifest_hash != pointer["manifest_sha256"].lower() or manifest["api_major"] != pointer["api_major"]:
-        raise ResolverError("Module source pointer does not match its manifest.")
+        raise SourceResolutionError("Module source pointer does not match its manifest.", "invalid", "pointer_manifest_mismatch")
     return pointer, package_root
 
 
@@ -343,14 +397,20 @@ def install_candidate(candidate: Dict[str, Any], state_root: Path, module_id: st
         return "already-cached" if status == "already-cached" else status
 
 
-def source_candidates(module_source_root: Path, module_id: str, api_major: int, engine_version: Tuple[int, int, int]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def source_candidates_with_state(module_source_root: Path, module_id: str, api_major: int,
+                                 engine_version: Tuple[int, int, int]) -> Tuple[List[Dict[str, Any]], Optional[str], str, Optional[str]]:
     try:
         module_root = contained_path(module_source_root, module_id)
         pointer, _ = validate_source_pointer(module_root, module_id, engine_version)
         max_version = parse_version(pointer["version"], "module source version")
         versions_root = contained_path(module_root, "versions")
+        try:
+            children = list(versions_root.iterdir())
+        except OSError as exc:
+            raise SourceResolutionError("The published module versions cannot be read.", "unavailable", "source_unavailable") from exc
         candidates: List[Dict[str, Any]] = []
-        for child in versions_root.iterdir():
+        minimum_engine_blocked = False
+        for child in children:
             if not child.is_dir():
                 continue
             try:
@@ -366,14 +426,29 @@ def source_candidates(module_source_root: Path, module_id: str, api_major: int, 
                     candidates.append({"version_parts": version, "version": child.name, "api_major": api_major,
                                        "activation_mode": manifest["activation_mode"], "path": child,
                                        "manifest": manifest, "manifest_hash": manifest_hash})
+            except ModuleCompatibilityError:
+                if child.name == pointer["version"]:
+                    raise
+                minimum_engine_blocked = True
             except (OSError, ResolverError):
                 if child.name == pointer["version"]:
                     raise
         if not candidates:
-            return [], None
-        return sorted(candidates, key=lambda item: item["version_parts"], reverse=True), None
+            if minimum_engine_blocked:
+                return [], "Compatible source modules require a newer AutoUpdate engine.", "incompatible", "minimum_engine"
+            return [], "No published module version supports API major " + str(api_major) + ".", "incompatible", "api_incompatible"
+        return sorted(candidates, key=lambda item: item["version_parts"], reverse=True), None, "available", None
+    except SourceResolutionError as exc:
+        return [], str(exc), exc.source_state, exc.source_error_code
     except (OSError, ResolverError) as exc:
-        return [], str(exc)
+        return [], str(exc), "invalid", "invalid_pointer"
+
+
+def source_candidates(module_source_root: Path, module_id: str, api_major: int,
+                      engine_version: Tuple[int, int, int]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Backward-compatible helper retaining the original two-value return contract."""
+    candidates, error, _, _ = source_candidates_with_state(module_source_root, module_id, api_major, engine_version)
+    return candidates, error
 
 
 def resolve_app(app_manifest_path: Path, module_source_root: Path, state_root: Path,
@@ -400,13 +475,20 @@ def resolve_app(app_manifest_path: Path, module_source_root: Path, state_root: P
             raise ResolverError("App module list contains a duplicate module ID.")
         seen.add(normalized_id)
 
-        candidates, source_error = source_candidates(module_source_root, module_id, api_major, engine_version)
+        candidates, source_error, source_state, source_error_code = source_candidates_with_state(
+            module_source_root, module_id, api_major, engine_version
+        )
         source_status = "offline-cache"
         if candidates:
             try:
                 source_status = install_candidate(candidates[0], state_root, module_id, engine_version)
+                if source_status == "conflict":
+                    source_state = "install_conflict"
+                    source_error_code = "install_conflict"
+                    source_error = "This immutable module version is already cached with different contents."
             except (OSError, ResolverError) as exc:
                 source_error = str(exc)
+                source_error_code = "install_failed"
         cached = verified_cached_versions(state_root, module_id, api_major, engine_version)
         if not cached:
             reason = source_error or "No valid published version supports the requested API major."
@@ -415,7 +497,8 @@ def resolve_app(app_manifest_path: Path, module_source_root: Path, state_root: P
         resolved.append({"module_id": module_id, "version": chosen["version"], "api_major": chosen["api_major"],
                          "activation_mode": chosen["activation_mode"], "module_path": str(chosen["path"]),
                          "verified": True, "delivery_level": "L1", "runtime_state": "not-reported",
-                         "source_status": source_status, "source_error": source_error})
+                         "source_status": source_status, "source_error": source_error,
+                         "source_state": source_state, "source_error_code": source_error_code})
     return {"schema": 1, "status": "ready", "app_id": app_id, "modules": resolved}
 
 

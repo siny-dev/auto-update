@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,8 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def build_module(self, version: str, api_major: int, payload: bytes = b"autosync api") -> Path:
+    def build_module(self, version: str, api_major: int, payload: bytes = b"autosync api",
+                     minimum_engine: str = "0.1.0") -> Path:
         module_root = self.source / "AutoSync"
         package_root = module_root / "versions" / version
         payload_path = package_root / "payload" / "src" / "client.py"
@@ -44,7 +46,7 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
             "module_id": "AutoSync",
             "version": version,
             "api_major": api_major,
-            "minimum_engine": "0.1.0",
+            "minimum_engine": minimum_engine,
             "publisher_policy": "local-share-v1",
             "activation_mode": "restart",
             "files": [{
@@ -87,31 +89,101 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
         self.assertEqual(module["version"], "0.1.13")
         self.assertEqual(module["delivery_level"], "L1")
         self.assertEqual(module["runtime_state"], "not-reported")
+        self.assertEqual(module["source_state"], "available")
+        self.assertIsNone(module["source_error_code"])
+        self.assertEqual(module["source_status"], "activated")
         self.assertEqual((Path(module["module_path"]) / "src" / "client.py").read_bytes(), b"autosync api")
         self.assertTrue((self.state / "modules" / "AutoSync" / "current.json").is_file())
         second = self.resolve()
         self.assertEqual(second["modules"][0]["source_status"], "already-cached")
+        self.assertEqual(second["modules"][0]["source_state"], "available")
+        self.assertIsNone(second["modules"][0]["source_error_code"])
 
     def test_incompatible_published_api_does_not_replace_compatible_cache(self) -> None:
-        self.build_module("0.1.12", 1, b"old api")
+        old_package = self.build_module("0.1.12", 1, b"old api")
         self.set_app_api(1)
         self.resolve()
+        shutil.rmtree(old_package)
         self.build_module("0.2.0", 2, b"new incompatible api")
         result = self.resolve()
-        self.assertEqual(result["modules"][0]["version"], "0.1.12")
-        self.assertEqual(result["modules"][0]["api_major"], 1)
+        module = result["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["api_major"], 1)
+        self.assertEqual(module["source_status"], "offline-cache")
+        self.assertEqual(module["source_state"], "incompatible")
+        self.assertEqual(module["source_error_code"], "api_incompatible")
 
     def test_corrupt_source_falls_back_only_to_verified_compatible_cache(self) -> None:
         self.build_module("0.1.12", 1, b"known good")
         self.set_app_api(1)
         self.resolve()
         payload = self.source / "AutoSync" / "versions" / "0.1.12" / "payload" / "src" / "client.py"
-        payload.write_bytes(b"tampered")
+        payload.write_bytes(b"bad hash!!")
         result = self.resolve()
         self.assertEqual(result["modules"][0]["version"], "0.1.12")
         self.assertEqual(result["modules"][0]["source_status"], "offline-cache")
+        self.assertEqual(result["modules"][0]["source_state"], "invalid")
+        self.assertEqual(result["modules"][0]["source_error_code"], "payload_hash_mismatch")
         cached_payload = Path(result["modules"][0]["module_path"]) / "src" / "client.py"
         self.assertEqual(cached_payload.read_bytes(), b"known good")
+
+    def test_missing_source_pointer_is_unavailable_and_falls_back_to_verified_cache(self) -> None:
+        self.build_module("0.1.12", 1, b"known good")
+        self.set_app_api(1)
+        self.resolve()
+        (self.source / "AutoSync" / "current.json").unlink()
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_status"], "offline-cache")
+        self.assertEqual(module["source_state"], "unavailable")
+        self.assertEqual(module["source_error_code"], "source_unavailable")
+
+    def test_invalid_source_pointer_is_classified_and_falls_back(self) -> None:
+        self.build_module("0.1.12", 1, b"known good")
+        self.set_app_api(1)
+        self.resolve()
+        (self.source / "AutoSync" / "current.json").write_text("{broken", encoding="utf-8")
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_state"], "invalid")
+        self.assertEqual(module["source_error_code"], "invalid_pointer")
+
+    def test_pointer_manifest_hash_mismatch_is_classified_as_invalid(self) -> None:
+        self.build_module("0.1.12", 1, b"known good")
+        self.set_app_api(1)
+        self.resolve()
+        pointer_path = self.source / "AutoSync" / "current.json"
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        pointer["manifest_sha256"] = "0" * 64
+        write_json(pointer_path, pointer)
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_state"], "invalid")
+        self.assertEqual(module["source_error_code"], "pointer_manifest_mismatch")
+
+    def test_minimum_engine_incompatibility_is_reported_with_cache_fallback(self) -> None:
+        self.build_module("0.1.12", 1, b"known good")
+        self.set_app_api(1)
+        self.resolve()
+        self.build_module("0.1.13", 1, b"requires newer engine", minimum_engine="0.2.0")
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_status"], "offline-cache")
+        self.assertEqual(module["source_state"], "incompatible")
+        self.assertEqual(module["source_error_code"], "minimum_engine")
+
+    def test_same_version_source_conflict_falls_back_with_conflict_state(self) -> None:
+        self.build_module("0.1.12", 1, b"cached original")
+        self.set_app_api(1)
+        self.resolve()
+        self.build_module("0.1.12", 1, b"different same-version source")
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_status"], "conflict")
+        self.assertEqual(module["source_state"], "install_conflict")
+        self.assertEqual(module["source_error_code"], "install_conflict")
+        cached_payload = Path(module["module_path"]) / "src" / "client.py"
+        self.assertEqual(cached_payload.read_bytes(), b"cached original")
 
     def test_bad_hash_with_empty_cache_fails_without_partial_version(self) -> None:
         package = self.build_module("0.1.13", 1)
