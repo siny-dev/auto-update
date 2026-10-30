@@ -25,6 +25,22 @@ The application must call the resolver at its normal update check (10 minutes in
 The shared `update-registered-apps.ps1` worker also prewarms its own PC cache on every update cycle. `sync-core-module.ps1` validates the shared AutoUpdate module package and installs it under that PC's `StateRoot`, even when the package matches the source and no new module version needs publishing. When source files change, it publishes the next immutable module version and then activates that verified version in the worker PC's cache. The two PCs therefore update their independent caches through their own workers; a fresh shared pointer alone does not imply that an idle PC has already updated its local cache. Cache installation failure is logged and retried on the next cycle without replacing a valid cached version.
 
 The v1 publisher policy is local shared-folder trust (`local-share-v1`); there is no signature/remote trust model yet. SHA-256 detects accidental damage and inconsistent files, but does not authenticate who published a package. Keep the module source folder writable only by the intended maintainers. GitHub publication is deliberately outside this local pilot.
+## Resolver source diagnostics
+
+Resolve results add optional `source_state` and `source_error_code` fields to each module record. They are additive to the existing `source_status` and `source_error` fields; clients that do not inspect them remain schema-compatible. `source_status` retains its install/cache meaning (for example, `activated`, `already-cached`, `offline-cache`, or `conflict`). `source_state` describes the local source result, not the application's data synchronization state.
+
+The stable source states and classifications are:
+
+| `source_state` | `source_error_code` | Meaning |
+| --- | --- | --- |
+| `available` | `null` | Pointer, manifest, payload hashes, and API/engine compatibility are valid; the resolver can use this source. |
+| `unavailable` | `source_unavailable` | Source pointer or published version storage is missing or unreadable; a verified compatible cache may be returned. |
+| `invalid` | `invalid_pointer`, `missing_manifest`, `invalid_manifest`, `pointer_manifest_mismatch`, `missing_payload`, `payload_size_mismatch`, `payload_hash_mismatch` | Source metadata or package integrity failed validation; a verified compatible cache may be returned. |
+| `incompatible` | `api_incompatible`, `minimum_engine` | The source is valid but no candidate satisfies the requested API major or minimum engine. |
+| `install_conflict` | `install_conflict` | The same immutable version is already cached with different contents; keep the verified cache and do not overwrite it. |
+
+If a valid source cannot be copied into the cache for another installation error, `source_state` remains `available` and `source_error_code` is `install_failed`. Consumers should treat a non-null error code as diagnostic detail and continue honoring `source_status` and the returned verified cache result.
+
 ## Delivery and activation evidence (L1/L2/L3)
 
 A resolver result is only delivery evidence: each resolved module reports delivery_level=L1 and runtime_state=not-reported. L1 means a SHA-256-verified immutable version exists in the PC cache; it does not mean the application loaded or activated it.

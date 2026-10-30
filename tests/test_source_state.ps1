@@ -74,6 +74,14 @@ try {
     Assert-State $badHash 'invalid' 'payload_hash_mismatch' 'offline-cache'
     if ($badHash.modules[0].version -cne '1.0.0') { throw 'Invalid source did not retain the verified cache.' }
 
+    Remove-Item -LiteralPath $payload -Force
+    $missingPayload = Resolve-AuAppModules -AppManifestPath $appPath -ModuleSourceRoot $sourceRoot -StateRoot $stateRoot
+    Assert-State $missingPayload 'invalid' 'missing_payload' 'offline-cache'
+
+    Remove-Item -LiteralPath (Join-Path $sourceRoot 'ProbeLib\versions\1.0.0\module.json') -Force
+    $missingManifest = Resolve-AuAppModules -AppManifestPath $appPath -ModuleSourceRoot $sourceRoot -StateRoot $stateRoot
+    Assert-State $missingManifest 'invalid' 'missing_manifest' 'offline-cache'
+
     Remove-Item -LiteralPath (Join-Path $sourceRoot 'ProbeLib\current.json') -Force
     $unavailable = Resolve-AuAppModules -AppManifestPath $appPath -ModuleSourceRoot $sourceRoot -StateRoot $stateRoot
     Assert-State $unavailable 'unavailable' 'source_unavailable' 'offline-cache'
@@ -98,7 +106,7 @@ try {
     Assert-State $installConflict 'install_conflict' 'install_conflict' 'conflict'
     if ($installConflict.modules[0].version -cne '1.0.0') { throw 'Install conflict replaced the verified cached version.' }
 
-    "PASS: Windows PowerShell $($PSVersionTable.PSVersion); 7 source_state outcomes (available, unavailable, invalid payload, invalid pointer, API/minimum-engine incompatibility, install conflict)"
+    "PASS: Windows PowerShell $($PSVersionTable.PSVersion); 9 source_state outcomes (available, unavailable, invalid/missing manifest/payload, invalid pointer, API/minimum-engine incompatibility, install conflict)"
 } finally {
     Remove-Module AutoUpdate.Core -ErrorAction SilentlyContinue
     $resolvedRoot = [IO.Path]::GetFullPath($testRoot)

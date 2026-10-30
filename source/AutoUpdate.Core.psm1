@@ -1103,6 +1103,8 @@ function Update-AuModuleFromLocalSource {
         }
         if($message -like '*hash mismatch*'){$code='payload_hash_mismatch'}
         elseif($message -like '*size mismatch*'){$code='payload_size_mismatch'}
+        elseif($message -like '*module package file is missing*'){$code='missing_payload'}
+        elseif($message -like '*module package manifest is missing*'){$code='missing_manifest'}
         elseif($message -like '*cannot be read*' -or $message -like '*access*denied*'){
             throw (New-AuModuleSourceFailure 'unavailable' 'source_unavailable' 'The pointed source package cannot be read.')
         }else{$code='invalid_manifest'}
@@ -1130,7 +1132,11 @@ function Update-AuModuleFromLocalSource {
             if($directory.Name -ceq [string]$pointer.version){
                 $message=$_.Exception.Message
                 if($message -like '*requires a newer AutoUpdate version*'){throw (New-AuModuleSourceFailure 'incompatible' 'minimum_engine' $message)}
-                if($message -like '*hash mismatch*'){$code='payload_hash_mismatch'}else{$code='invalid_manifest'}
+                if($message -like '*hash mismatch*'){$code='payload_hash_mismatch'}
+                elseif($message -like '*size mismatch*'){$code='payload_size_mismatch'}
+                elseif($message -like '*module package file is missing*'){$code='missing_payload'}
+                elseif($message -like '*module package manifest is missing*'){$code='missing_manifest'}
+                else{$code='invalid_manifest'}
                 throw (New-AuModuleSourceFailure 'invalid' $code $message)
             }
             if($_.Exception.Message -like '*requires a newer AutoUpdate version*'){$minimumEngineBlocked=$true}

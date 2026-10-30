@@ -138,6 +138,18 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
         self.assertEqual(module["source_state"], "unavailable")
         self.assertEqual(module["source_error_code"], "source_unavailable")
 
+    def test_missing_source_payload_is_invalid_and_falls_back(self) -> None:
+        self.build_module("0.1.12", 1, b"known good")
+        self.set_app_api(1)
+        self.resolve()
+        payload = self.source / "AutoSync" / "versions" / "0.1.12" / "payload" / "src" / "client.py"
+        payload.unlink()
+        module = self.resolve()["modules"][0]
+        self.assertEqual(module["version"], "0.1.12")
+        self.assertEqual(module["source_status"], "offline-cache")
+        self.assertEqual(module["source_state"], "invalid")
+        self.assertEqual(module["source_error_code"], "missing_payload")
+
     def test_invalid_source_pointer_is_classified_and_falls_back(self) -> None:
         self.build_module("0.1.12", 1, b"known good")
         self.set_app_api(1)
