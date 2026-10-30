@@ -80,6 +80,75 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
     def resolve(self) -> dict:
         return resolver.resolve_app(self.app_manifest, self.source, self.state, self.engine_version)
 
+    def relative_path_for_absolute_units(self, root: Path, target_units: int) -> str:
+        base = root.resolve(strict=False)
+        remaining = target_units - resolver.windows_path_units(base) - 1
+        if remaining < 1:
+            self.skipTest("Temporary root is too long for an exact MAX_PATH boundary fixture.")
+        parts = []
+        while remaining > 240:
+            parts.append("x" * 240)
+            remaining -= 241
+        parts.append("x" * remaining)
+        return "/".join(parts)
+
+    def test_source_and_cache_payload_paths_obey_max_path_boundary(self) -> None:
+        roots = (
+            ("source", self.source / "AutoSync" / "versions" / "0.1.0"),
+            ("cache", self.state / "modules" / "AutoSync" / "versions" / "0.1.0"),
+        )
+        for root_name, root in roots:
+            relative_259 = self.relative_path_for_absolute_units(root, 259)
+            path_259 = resolver.contained_path(root, relative_259)
+            self.assertEqual(resolver.windows_path_units(path_259), 259, root_name)
+
+            relative_260 = self.relative_path_for_absolute_units(root, 260)
+            with self.assertRaisesRegex(resolver.ResolverError, "MAX_PATH"):
+                resolver.contained_path(root, relative_260)
+
+    def test_windows_component_length_boundary_is_enforced_before_io(self) -> None:
+        resolver._validate_windows_component("x" * 255)
+        with self.assertRaisesRegex(resolver.ResolverError, "255 UTF-16"):
+            resolver._validate_windows_component("x" * 256)
+        # A supplementary character consumes two WCHAR units, even though it
+        # is a single Python code point.
+        with self.assertRaisesRegex(resolver.ResolverError, "255 UTF-16"):
+            resolver._validate_windows_component("x" * 254 + "😀")
+
+    def test_zero_byte_and_unicode_space_payload_paths_remain_valid(self) -> None:
+        package = self.build_module("0.1.14", 1)
+        extra = package / "payload" / "assets" / "한글 note.txt"
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_bytes(b"")
+
+        manifest_path = package / "module.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"].append({
+            "path": "assets/한글 note.txt",
+            "kind": "resource",
+            "size": 0,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "source": "payload/assets/한글 note.txt",
+        })
+        write_json(manifest_path, manifest)
+        module_root = self.source / "AutoSync"
+        pointer = json.loads((module_root / "current.json").read_text(encoding="utf-8"))
+        pointer["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        write_json(module_root / "current.json", pointer)
+
+        self.set_app_api(1)
+        result = self.resolve()
+        payload = Path(result["modules"][0]["module_path"]) / "assets" / "한글 note.txt"
+        self.assertTrue(payload.is_file())
+        self.assertEqual(payload.stat().st_size, 0)
+
+    def test_reserved_windows_device_names_are_rejected(self) -> None:
+        root = self.source / "AutoSync"
+        for relative in ("payload/CON", "payload/nul.txt", "payload/CONIN$", "payload/CONOUT$.txt",
+                         "payload/NUL .txt", "payload/COM1.log", "payload/LPT³.dat"):
+            with self.subTest(relative=relative), self.assertRaisesRegex(resolver.ResolverError, "reserved Windows device"):
+                resolver.contained_path(root, relative)
+
     def test_fresh_cache_install_then_reuse_is_verified(self) -> None:
         self.build_module("0.1.13", 1)
         self.set_app_api(1)
@@ -289,8 +358,8 @@ class AutoUpdatePythonModuleResolverTests(unittest.TestCase):
         self.assertEqual(second_result["modules"][0]["version"], "0.1.13")
         versions = list((self.state / "modules" / "AutoSync" / "versions").iterdir())
         self.assertEqual([path.name for path in versions if path.is_dir()], ["0.1.13"])
-        staging = self.state / "modules" / "AutoSync" / "staging"
-        self.assertFalse(list(staging.iterdir()))
+        staging = self.state / "modules" / "AutoSync" / "versions" / "s"
+        self.assertFalse(staging.exists())
 
 
 if __name__ == "__main__":

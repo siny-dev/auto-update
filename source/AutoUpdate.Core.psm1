@@ -78,11 +78,40 @@ function Test-AuManifest {
     return $true
 }
 
+function Assert-AuWindowsPathLength {
+    param([Parameter(Mandatory=$true)][string]$Path,[string]$Field='Module path')
+    if($Path.Length -ge 260){throw "$Field exceeds Windows MAX_PATH (259 UTF-16 code units)."}
+}
+
+function Assert-AuModuleRelativePath {
+    param([Parameter(Mandatory=$true)][string]$Relative)
+    if([string]::IsNullOrEmpty($Relative)){throw 'Unsafe module path.'}
+    $normalized=$Relative.Replace('\','/')
+    if($normalized.StartsWith('/') -or $normalized -match '^[A-Za-z]:' -or $normalized.Contains(':')){throw 'Unsafe module path.'}
+    foreach($part in $normalized.Split('/')){
+        if([string]::IsNullOrEmpty($part) -or $part -in @('.','..')){throw 'Unsafe module path.'}
+        if($part.Length -gt 255){throw 'A Windows module path component exceeds 255 UTF-16 code units.'}
+        if($part -match '[\x00-\x1f\x7f-\x9f<>:"|?*]'){throw 'Unsafe characters in Windows module path.'}
+        if($part.StartsWith(' ')){throw 'Windows module path components cannot start with a space.'}
+        if($part.EndsWith(' ') -or $part.EndsWith('.')){throw 'Windows module path components cannot end with a space or period.'}
+        $stem=$part.Split('.')[0].TrimEnd(' ','.')
+        $reserved=@('con','prn','aux','nul','conin$','conout$')
+        for($i=1;$i -le 9;$i++){$reserved+=('com'+$i);$reserved+=('lpt'+$i)}
+        foreach($digit in @([char]0x00b9,[char]0x00b2,[char]0x00b3)){$reserved+=('com'+$digit);$reserved+=('lpt'+$digit)}
+        if($reserved -contains $stem.ToLowerInvariant()){throw 'A module path uses a reserved Windows device name.'}
+    }
+}
+
 function Get-AuContainedPath {
     param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][string]$Relative)
-    $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    Assert-AuModuleRelativePath $Relative
+    $fullRoot = [IO.Path]::GetFullPath($Root)
+    if($fullRoot.Length -gt 3){$fullRoot=$fullRoot.TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)}
+    Assert-AuWindowsPathLength $fullRoot 'Module root'
     $candidate = [IO.Path]::GetFullPath((Join-Path $fullRoot ($Relative.Replace('/',[IO.Path]::DirectorySeparatorChar))))
-    if (-not $candidate.StartsWith($fullRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Resolved path escapes its root.' }
+    Assert-AuWindowsPathLength $candidate 'Resolved module payload path'
+    $rootPrefix=if($fullRoot.EndsWith([IO.Path]::DirectorySeparatorChar.ToString())){$fullRoot}else{$fullRoot+[IO.Path]::DirectorySeparatorChar}
+    if (-not $candidate.StartsWith($rootPrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Resolved path escapes its root.' }
     return $candidate
 }
 
@@ -761,8 +790,9 @@ function Test-AuModuleManifest {
     foreach($file in $Manifest.files){
         foreach($field in @('path','kind','size','sha256','source')){if($null -eq $file.$field){throw "Module manifest file entry is missing $field."}}
         $relative=[string]$file.path
-        if([string]::IsNullOrWhiteSpace($relative) -or $relative -match '(^[/\\]|^[A-Za-z]:|(^|[/\\])\.\.([/\\]|$)|:|[\x00-\x1f])'){throw 'Unsafe module payload path.'}
+        Assert-AuModuleRelativePath $relative
         if([string]::IsNullOrWhiteSpace([string]$file.source)){throw 'Module manifest paths cannot be empty.'}
+        Assert-AuModuleRelativePath ([string]$file.source)
         $normalized=$relative.Replace('\','/').ToLowerInvariant()
         if($seen.ContainsKey($normalized)){throw 'Duplicate module payload path.'}
         $seen[$normalized]=$true
@@ -779,7 +809,8 @@ function Get-AuModuleManifestFromPackage {
     param([Parameter(Mandatory=$true)][string]$PackageRoot,[Parameter(Mandatory=$true)][string]$ModuleId,[switch]$InstalledLayout)
     $manifestPath=Get-AuContainedPath $PackageRoot 'module.json'
     if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw 'Module package manifest is missing.'}
-    $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
+    $manifestText=[Text.UTF8Encoding]::new($false,$true).GetString([IO.File]::ReadAllBytes($manifestPath))
+    $manifest=$manifestText|ConvertFrom-Json
     Test-AuModuleManifest -Manifest $manifest -ExpectedModuleId $ModuleId|Out-Null
     foreach($entry in $manifest.files){
         $contentPath=if($InstalledLayout){[string]$entry.path}else{[string]$entry.source}
@@ -909,15 +940,27 @@ function Install-AuModulePackage {
         $manifest=$packageInfo.Manifest
         $version=[string]$manifest.version
         $moduleRoot=Get-AuContainedPath $StateRoot "modules/$ModuleId"
-        $versionsRoot=Join-Path $moduleRoot 'versions';$stagingRoot=Join-Path $moduleRoot 'staging'
-        [void][IO.Directory]::CreateDirectory($versionsRoot);[void][IO.Directory]::CreateDirectory($stagingRoot)
+        $versionsRoot=Get-AuContainedPath $moduleRoot 'versions'
+        # Keep staging below versions with one path component. This makes every
+        # staging payload no longer than the same payload under a semver root.
+        $stagingRoot=Get-AuContainedPath $versionsRoot 's'
         $versionPath=Get-AuContainedPath $versionsRoot $version
+        foreach($entry in $manifest.files){[void](Get-AuContainedPath $versionPath ([string]$entry.path))}
+        $pointerPath=Get-AuContainedPath $moduleRoot 'current.json'
+        $temporary=$pointerPath+'.part';Assert-AuWindowsPathLength $temporary 'Module cache temporary pointer path'
+        $previous=Get-AuContainedPath $moduleRoot 'previous.json'
+        [void][IO.Directory]::CreateDirectory($versionsRoot)
         if(Test-Path -LiteralPath $versionPath -PathType Container){
             $existing=Get-AuModuleManifestFromPackage -PackageRoot $versionPath -ModuleId $ModuleId -InstalledLayout
             if($existing.ManifestHash -cne $packageInfo.ManifestHash){return [pscustomobject]@{Status='conflict';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='This module version already exists with different contents; both source copies were preserved.'}}
             $installed=[pscustomobject]@{Status='already-cached';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='This immutable module version is already cached.'}
         }else{
-            $stage=Join-Path $stagingRoot ([guid]::NewGuid().ToString('N'))
+            if(Test-Path -LiteralPath $stagingRoot){
+                $stageInfo=Get-Item -LiteralPath $stagingRoot -Force
+                if(($stageInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'The module staging directory cannot be a reparse point.'}
+                Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+            }
+            $stage=$stagingRoot
             [void][IO.Directory]::CreateDirectory($stage)
             try{
                 foreach($entry in $manifest.files){
@@ -936,12 +979,14 @@ function Install-AuModulePackage {
             }
             $installed=[pscustomobject]@{Status='cached';ModuleId=$ModuleId;Version=$version;Path=$versionPath;Message='Verified immutable module version was cached.'}
         }
-        $pointerPath=Join-Path $moduleRoot 'current.json'
         $current=Get-AuCurrentModule -StateRoot $StateRoot -ModuleId $ModuleId
         if(-not $current -or [version]$version -gt [version]$current.Version){
             $pointer=[ordered]@{schema=1;module_id=$ModuleId;version=$version;api_major=[int]$manifest.api_major;manifest_sha256=$packageInfo.ManifestHash;activated_utc=[DateTime]::UtcNow.ToString('o')}
-            $temporary=$pointerPath+'.'+[guid]::NewGuid().ToString('N')+'.part'
-            $previous=Join-Path $moduleRoot 'previous.json'
+            if(Test-Path -LiteralPath $temporary){
+                $temporaryInfo=Get-Item -LiteralPath $temporary -Force
+                if(($temporaryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'The module temporary pointer cannot be a reparse point.'}
+                Remove-Item -LiteralPath $temporary -Force
+            }
             [IO.File]::WriteAllText($temporary,($pointer|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
             try{
                 if(Test-Path -LiteralPath $pointerPath -PathType Leaf){

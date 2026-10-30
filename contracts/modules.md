@@ -1,5 +1,9 @@
 # Shared module contract v1
 
+## Windows path envelope
+
+The resolver and package builder target classic Win32 file APIs: every absolute source payload path and installed cache payload path must contain at most 259 UTF-16 code units (260 including the terminating NUL), and every path component must contain at most 255 UTF-16 code units. Reject rooted/traversal paths, Windows-invalid characters, leading or trailing spaces, trailing periods, and reserved DOS device stems (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`–`COM9`, `LPT1`–`LPT9`, including superscript ¹²³ forms). Interior spaces, Unicode names, and zero-byte payload files remain valid. The package builder checks source and destination payload paths; the resolver repeats the checks against the actual source and cache roots before copying.
+
 An application declares stable module IDs and required API major versions in an `autoupdate-app-modules-v1` JSON file. AutoUpdate reads the shared-folder source, verifies the immutable version manifest and every SHA-256, and copies each version once into the PC user's common AutoUpdate state root:
 
 ```text

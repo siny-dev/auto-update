@@ -24,9 +24,16 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MAX_JSON_BYTES = 1024 * 1024
 MAX_MODULE_FILE_BYTES = 256 * 1024 * 1024
 MAX_MODULE_FILES = 4096
+WINDOWS_MAX_PATH_CHARS = 260  # Includes the NUL terminator; strings may use at most 259 UTF-16 code units.
+WINDOWS_MAX_COMPONENT_CHARS = 255  # Windows file systems limit each component to 255 UTF-16 code units.
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+WINDOWS_RESERVED_DEVICE_STEMS = frozenset((
+    "con", "prn", "aux", "nul", "conin$", "conout$",
+    *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10)),
+    "com¹", "com²", "com³", "lpt¹", "lpt²", "lpt³",
+))
 
 
 class ResolverError(Exception):
@@ -125,15 +132,50 @@ def valid_id(value: Any, field: str) -> str:
     return value
 
 
+def windows_path_units(path: Path | str) -> int:
+    """Return the number of Windows WCHAR units in a filesystem path."""
+    try:
+        return len(str(path).encode("utf-16-le", errors="strict")) // 2
+    except UnicodeEncodeError as exc:
+        raise ResolverError("A module path is not valid Unicode.") from exc
+
+
+def require_windows_path(path: Path | str, field: str = "Module path") -> None:
+    if windows_path_units(path) >= WINDOWS_MAX_PATH_CHARS:
+        raise ResolverError(field + " exceeds Windows MAX_PATH (259 UTF-16 code units).")
+
+
+def _validate_windows_component(component: str) -> None:
+    if not component or component in (".", ".."):
+        raise ResolverError("Unsafe module path.")
+    if windows_path_units(component) > WINDOWS_MAX_COMPONENT_CHARS:
+        raise ResolverError("A Windows module path component exceeds 255 UTF-16 code units.")
+    if any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F or ch in '<>:"|?*' for ch in component):
+        raise ResolverError("Unsafe Windows module path.")
+    if component.startswith(" ") or component.endswith((" ", ".")):
+        raise ResolverError("Windows module path components cannot start with a space or end in a space or period.")
+    device_stem = component.split(".", 1)[0].rstrip(" .").casefold()
+    if device_stem in WINDOWS_RESERVED_DEVICE_STEMS:
+        raise ResolverError("A module path uses a reserved Windows device name.")
+
+
 def contained_path(root: Path, relative: Any) -> Path:
-    if not isinstance(relative, str) or not relative or any(ord(ch) < 32 for ch in relative):
+    if not isinstance(relative, str) or not relative:
         raise ResolverError("Unsafe module path.")
     normalized = relative.replace("\\", "/")
     pieces = normalized.split("/")
     if normalized.startswith("/") or ":" in normalized or any(piece in ("", ".", "..") for piece in pieces):
         raise ResolverError("Unsafe module path.")
-    base = root.resolve(strict=False)
-    candidate = (base.joinpath(*pieces)).resolve(strict=False)
+    for piece in pieces:
+        _validate_windows_component(piece)
+    root_path = Path(root)
+    require_windows_path(root_path.absolute(), "Module root")
+    base = root_path.resolve(strict=False)
+    require_windows_path(base, "Module root")
+    candidate = base.joinpath(*pieces)
+    require_windows_path(candidate, "Resolved module payload path")
+    candidate = candidate.resolve(strict=False)
+    require_windows_path(candidate, "Resolved module payload path")
     try:
         candidate.relative_to(base)
     except ValueError as exc:
@@ -328,12 +370,23 @@ class ModuleInstallLock:
 def install_candidate(candidate: Dict[str, Any], state_root: Path, module_id: str, engine_version: Tuple[int, int, int]) -> str:
     module_root = state_root / "modules" / module_id
     versions_root = module_root / "versions"
-    staging_root = module_root / "staging"
-    versions_root.mkdir(parents=True, exist_ok=True)
-    staging_root.mkdir(parents=True, exist_ok=True)
+    # A single-character staging directory is shorter than every valid semver
+    # directory, so the temporary tree does not consume extra MAX_PATH space.
+    staging_root = versions_root / "s"
     version = candidate["version"]
     version_path = versions_root / version
-    with ModuleInstallLock(module_root / "install.lock"):
+    install_lock_path = module_root / "install.lock"
+    pointer_path = module_root / "current.json"
+    require_windows_path(module_root, "Module cache root")
+    require_windows_path(versions_root, "Module versions root")
+    require_windows_path(staging_root, "Module staging root")
+    require_windows_path(version_path, "Installed module version root")
+    require_windows_path(install_lock_path, "Module install lock path")
+    require_windows_path(pointer_path, "Module cache pointer path")
+    for entry in candidate["manifest"]["files"]:
+        contained_path(version_path, entry["path"])
+    versions_root.mkdir(parents=True, exist_ok=True)
+    with ModuleInstallLock(install_lock_path):
         status = "cached"
         if version_path.is_dir():
             try:
@@ -344,7 +397,12 @@ def install_candidate(candidate: Dict[str, Any], state_root: Path, module_id: st
                 return "conflict"
             status = "already-cached"
         else:
-            stage = Path(tempfile.mkdtemp(prefix="stage-", dir=str(staging_root)))
+            if staging_root.is_symlink():
+                raise ResolverError("The module staging directory cannot be a symbolic link.")
+            if staging_root.exists():
+                shutil.rmtree(staging_root)
+            staging_root.mkdir()
+            stage = staging_root
             try:
                 source_root = candidate["path"]
                 manifest = candidate["manifest"]
@@ -375,7 +433,6 @@ def install_candidate(candidate: Dict[str, Any], state_root: Path, module_id: st
                 if stage.exists():
                     shutil.rmtree(stage)
 
-        pointer_path = module_root / "current.json"
         current = None
         try:
             current_doc = read_json(pointer_path)
