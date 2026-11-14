@@ -1,8 +1,10 @@
 $ErrorActionPreference='Stop'
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('au-worker-hot-reload-'+[guid]::NewGuid().ToString('N'))
-$tools=Join-Path $temp 'tools';$source=Join-Path $temp 'source';$state=Join-Path $temp 'state'
+$tools=Join-Path $temp 'tools';$source=Join-Path $temp 'source';$state=Join-Path $temp 'state';$config=Join-Path $temp 'config';$recipeRoot=Join-Path $temp 'outbox\apps\TEST-APP'
 $trace=Join-Path $temp 'module-trace.txt';$newModulePath=Join-Path $temp 'new-engine.psm1'
-[void][IO.Directory]::CreateDirectory($tools);[void][IO.Directory]::CreateDirectory($source)
+[void][IO.Directory]::CreateDirectory($tools);[void][IO.Directory]::CreateDirectory($source);[void][IO.Directory]::CreateDirectory($config)
+[void][IO.Directory]::CreateDirectory($recipeRoot)
+[IO.File]::WriteAllText((Join-Path $config 'update-policy.json'),'{"schema":1,"interval_minutes":10,"local_only":true}',[Text.UTF8Encoding]::new($false))
 [void][IO.Directory]::CreateDirectory((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source'))
 [void][IO.Directory]::CreateDirectory((Join-Path $state 'logs'))
 $worker=Join-Path $tools 'update-registered-apps.ps1'
@@ -11,6 +13,14 @@ $policyReader=Join-Path $PSScriptRoot '..\tools\read-update-policy.ps1'
 Copy-Item -LiteralPath $policyReader -Destination (Join-Path $tools 'read-update-policy.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\shared-cycle-lock.ps1') -Destination (Join-Path $tools 'shared-cycle-lock.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\tools\guard-local-package-version.ps1') -Destination (Join-Path $tools 'guard-local-package-version.ps1')
+$buildSource=@'
+param($RecipePath,$PackageRoot,$RemoteVersion)
+if($RemoteVersion){[IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('build-remote:'+ $RemoteVersion+[char]10))}
+[IO.File]::AppendAllText($env:AU_WORKER_TEST_BUILD_MARKER,('built:'+ [string]$RemoteVersion+[char]10))
+@{status='built';app_id='TEST-APP';version='1.0.1';message='fixture'}|ConvertTo-Json -Compress
+'@
+[IO.File]::WriteAllText((Join-Path $tools 'build-local-package.ps1'),$buildSource,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $recipeRoot 'build.json'),'{"app_id":"TEST-APP"}',[Text.UTF8Encoding]::new($false))
 $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Local\AuWorkerHotReloadTestWorker').Replace('Local\AutoUpdateRegisteredApps','Local\AuWorkerHotReloadTestCycle')
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
@@ -18,13 +28,14 @@ $script:EngineLabel='@@LABEL@@'
 function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='2-APP';owner='sample';repository='second-app';architecture='x64'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'}) }
 function Register-AuApplication { param($StateRoot,$AppId,$Owner,$Repository,$Architecture); [pscustomobject]@{Status='registered'} }
 function Get-AuLatestLocalPackage { param($PackageRoot,$AppId,$Architecture); $null }
-function Get-AuLatestReleaseManifest { param($Owner,$Repository,$AppId,$Architecture); $null }
-function Publish-AuLocalPackage { param($Owner,$Repository,$AppId,$PackageRoot,$Architecture); $null }
+function Get-AuLatestReleaseManifest { param($Owner,$Repository,$AppId,$Architecture); [IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('remote:'+ $AppId+[char]10)); $null }
+function Publish-AuLocalPackage { param($Owner,$Repository,$AppId,$PackageRoot,$Architecture); [IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('publish:'+ $AppId+[char]10)); $null }
 function Get-AuReleaseUploadPlan { param($PackageRoot,$Architecture); $null }
 function Save-AuPackageToLocal { param($Owner,$Repository,$AppId,$StateRoot,$Architecture); $null }
 function Get-AuVerifiedCurrent { param($StateRoot,$AppId,$Architecture); $null }
 function Install-AuLatestAvailable {
-    param($Owner,$Repository,$AppId,$StateRoot,$Architecture,$LocalPackageRoot)
+    param($Owner,$Repository,$AppId,$StateRoot,$Architecture,$LocalPackageRoot,[switch]$LocalOnly)
+    if($LocalOnly){[IO.File]::AppendAllText($env:AU_WORKER_TEST_LOCAL_MARKER,($AppId+[char]10))}
     if($AppId -ceq 'AutoUpdate' -and $script:EngineLabel -eq 'old'){
         $versionRoot=Join-Path $StateRoot 'apps\AutoUpdate\versions\0.1.2'
         $source=Join-Path $versionRoot 'source';[void][IO.Directory]::CreateDirectory($source)
@@ -49,9 +60,12 @@ $oldPath=Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source\AutoUpdate.Core
 $oldSha=(Get-FileHash -LiteralPath $oldPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\manifest.json'),(@{files=@(@{kind='runtime';path='source/AutoUpdate.Core.psm1';sha256=$oldSha})}|ConvertTo-Json -Depth 6))
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\current.json'),('{"schema":1,"app_id":"AutoUpdate","version":"0.1.1"}'))
-$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER;$previousDelay=$env:AU_WORKER_TEST_DELAY_MS;$previousWaitMarker=$env:AU_WORKER_TEST_WAIT_MARKER
+$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER;$previousDelay=$env:AU_WORKER_TEST_DELAY_MS;$previousWaitMarker=$env:AU_WORKER_TEST_WAIT_MARKER;$previousRemoteMarker=$env:AU_WORKER_TEST_REMOTE_MARKER;$previousLocalMarker=$env:AU_WORKER_TEST_LOCAL_MARKER;$previousBuildMarker=$env:AU_WORKER_TEST_BUILD_MARKER
 try{
     $env:AU_WORKER_TEST_STATE=$state;$env:AU_WORKER_TEST_TRACE=$trace;$env:AU_WORKER_TEST_NEW_MODULE=$newModulePath
+    $env:AU_WORKER_TEST_REMOTE_MARKER=Join-Path $temp 'unexpected-remote-call.txt';$env:AU_WORKER_TEST_LOCAL_MARKER=Join-Path $temp 'local-only-apps.txt'
+    $env:AU_WORKER_TEST_BUILD_MARKER=Join-Path $temp 'local-builds.txt'
+    [IO.File]::WriteAllText((Join-Path $tools 'sync-core-module.ps1'),"[IO.File]::WriteAllText(`$env:AU_WORKER_TEST_REMOTE_MARKER,'module-publication')",[Text.UTF8Encoding]::new($false))
     $shell=Join-Path $PSHOME 'pwsh.exe'
     if(-not (Test-Path -LiteralPath $shell)){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
     $workerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$worker,'-Once','-StateRoot',$state,'-Owner','sample','-Repository','engine')
@@ -69,14 +83,19 @@ try{
     if($rows -notcontains 'old:AutoUpdate'){throw 'The active engine did not process its own update.'}
     if($rows -notcontains 'new:TEST-APP'){throw 'The remaining app was not processed with the newly installed engine in the same cycle.'}
     if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
+    if(Test-Path -LiteralPath $env:AU_WORKER_TEST_REMOTE_MARKER){throw 'Local-only worker attempted source/module synchronization, GitHub lookup, or release publication.'}
+    if(-not (Select-String -LiteralPath $env:AU_WORKER_TEST_BUILD_MARKER -SimpleMatch 'built:' -Quiet)){throw 'Local-only worker did not build a changed app package from its recipe.'}
+    $localRows=@(Get-Content -LiteralPath $env:AU_WORKER_TEST_LOCAL_MARKER)
+    if($localRows -notcontains 'AutoUpdate' -or $localRows -notcontains 'TEST-APP' -or $localRows -notcontains '2-APP'){throw 'Local-only mode did not reach every registered application.'}
     Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
     $logRows=@(Get-Content -LiteralPath (Join-Path $state 'logs\app-updates.jsonl')|ForEach-Object{$_|ConvertFrom-Json})
     $autoRow=@($logRows|Where-Object{$_.app_id -ceq 'AutoUpdate'}|Select-Object -First 1)
-    $otherRows=@($logRows|Where-Object{$_.app_id -in @('TEST-APP','2-APP')})
+    $otherRows=@($logRows|Where-Object{$_.app_id -in @('TEST-APP','2-APP') -and $_.status -notlike 'build-*'})
     if($autoRow.Count -ne 1 -or $autoRow[0].engine_version -cne '0.1.1'){throw 'The AutoUpdate app did not record the engine version that performed its own check.'}
-    if($otherRows.Count -ne 2 -or @($otherRows|Where-Object{$_.engine_version -cne '0.1.2'}).Count){throw 'The remaining apps did not record the newly loaded engine version.'}
+    if($otherRows.Count -ne 2 -or @($otherRows|Where-Object{$_.engine_version -cne '0.1.2'}).Count){throw ('The remaining apps did not record the newly loaded engine version: '+(@($otherRows|ForEach-Object{$_.app_id+':'+$_.engine_version+':'+$_.status}) -join ', '))}
     Write-Output 'PASS each app log records the exact AutoUpdate engine version used for its check.'
     $cadenceWorker=Join-Path $tools 'cadence-worker.ps1';$waitMarker=Join-Path $temp 'cycle-wait-ms.txt'
+    [IO.File]::WriteAllText((Join-Path $config 'update-policy.json'),'{"schema":1,"interval_minutes":1,"local_only":true}',[Text.UTF8Encoding]::new($false))
     $cadenceSource=$workerSource.Replace('if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}','if($waitMilliseconds -gt 0){[IO.File]::WriteAllText($env:AU_WORKER_TEST_WAIT_MARKER,[string]$waitMilliseconds);exit 0}')
     if($cadenceSource -ceq $workerSource -or $cadenceSource.Contains('Start-Sleep -Milliseconds $waitMilliseconds')){throw 'Could not isolate the worker cadence wait for testing.'}
     [IO.File]::WriteAllText($cadenceWorker,$cadenceSource,[Text.UTF8Encoding]::new($false))
@@ -123,5 +142,8 @@ try{
     if($null -eq $previousMarker){Remove-Item Env:AU_WORKER_TEST_RESTART_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_RESTART_MARKER=$previousMarker}
     if($null -eq $previousDelay){Remove-Item Env:AU_WORKER_TEST_DELAY_MS -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_DELAY_MS=$previousDelay}
     if($null -eq $previousWaitMarker){Remove-Item Env:AU_WORKER_TEST_WAIT_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_WAIT_MARKER=$previousWaitMarker}
+    if($null -eq $previousRemoteMarker){Remove-Item Env:AU_WORKER_TEST_REMOTE_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_REMOTE_MARKER=$previousRemoteMarker}
+    if($null -eq $previousLocalMarker){Remove-Item Env:AU_WORKER_TEST_LOCAL_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_LOCAL_MARKER=$previousLocalMarker}
+    if($null -eq $previousBuildMarker){Remove-Item Env:AU_WORKER_TEST_BUILD_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_BUILD_MARKER=$previousBuildMarker}
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

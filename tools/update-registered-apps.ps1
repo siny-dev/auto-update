@@ -61,7 +61,9 @@ function Invoke-UpdateCycle{
         }
         $apps=@(Get-AuRegisteredApps -StateRoot $StateRoot)
         $orderedApps=@($apps|Where-Object{$_.app_id -ceq 'AutoUpdate'})+@($apps|Where-Object{$_.app_id -cne 'AutoUpdate'})
-        try{
+        if($script:cycleLocalOnly){
+            Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='module-local-only';Version=$null;Message='Shared module publication is skipped in local-only mode.'})
+        }else{try{
             $moduleOutput=& (Join-Path $root 'tools\sync-core-module.ps1') -StateRoot $StateRoot
             $moduleResult=([string]::Join([Environment]::NewLine,@($moduleOutput|ForEach-Object{[string]$_}))|ConvertFrom-Json -ErrorAction Stop)
             $moduleMessage=[string]$moduleResult.message
@@ -70,7 +72,7 @@ function Invoke-UpdateCycle{
         }catch{
             $moduleMessage=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
             Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='module-sync-failed';Version=$null;Message=$moduleMessage})
-        }
+        }}
         foreach($app in $orderedApps){
             $localPackageRoot=Join-Path $root ('outbox\apps\'+$app.app_id)
             $buildRecipe=Join-Path $localPackageRoot 'build.json'

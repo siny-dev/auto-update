@@ -63,6 +63,22 @@ try{
     }finally{
         & $module {param($lookup) Set-Item Function:\Get-AuLatestReleaseManifest -Value $lookup} $remoteLookup
     }
+    $remoteLookup=& $module {(Get-Item Function:\Get-AuLatestReleaseManifest).ScriptBlock}
+    & $module {Set-Item Function:\Get-AuLatestReleaseManifest -Value {throw 'Local-only mode attempted a GitHub request.'}}
+    try{
+        $localOnlyState=Join-Path $testRoot 'local-only-state'
+        $localOnly=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId demo -StateRoot $localOnlyState -Architecture x64 -LocalPackageRoot $localRoot -LocalOnly
+        Assert ($localOnly.Status -eq 'staged' -and $localOnly.Version -eq '1.0.2') 'local-only mode did not apply the verified local patch'
+        $active=Get-AuVerifiedCurrent -StateRoot $localOnlyState -AppId demo -Architecture x64
+        Assert ($active.Verified -and $active.Version -eq '1.0.2') 'local-only patch pointer/payload failed post-install verification'
+        $already=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId demo -StateRoot $localOnlyState -Architecture x64 -LocalPackageRoot $localRoot -LocalOnly
+        Assert ($already.Status -eq 'already-current') 'local-only mode did not retain an already-current verified patch'
+        $empty=Install-AuLatestAvailable -Owner siny-dev -Repository auto-update -AppId empty -StateRoot (Join-Path $testRoot 'empty-state') -Architecture x64 -LocalPackageRoot (Join-Path $testRoot 'empty-packages') -LocalOnly
+        Assert ($empty.Status -eq 'not-found') 'local-only mode did not report a missing local package clearly'
+        'PASS: local-only patch install, pointer/hash verification, already-current handling, missing-candidate handling, and zero GitHub requests'
+    }finally{
+        & $module {param($lookup) Set-Item Function:\Get-AuLatestReleaseManifest -Value $lookup} $remoteLookup
+    }
     'PASS: highest local version, GitHub/local winner, same-hash equality, same-version conflict, and local staging'
     $module=Get-Module AutoUpdate.Core | Select-Object -Last 1
     $legacyRelease=[pscustomobject]@{assets=@([pscustomobject]@{name='workboard.exe';size=123})}

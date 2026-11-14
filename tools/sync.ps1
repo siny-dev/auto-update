@@ -1,5 +1,13 @@
 param([switch]$Once,[switch]$AllowFileRemote,[ValidateRange(1,1440)][int]$IntervalMinutes=10,[string]$MutexName='Local\AutoUpdateSourceSync',[ValidateRange(0,300000)][int]$SharedLockTimeoutMilliseconds=60000)
 $ErrorActionPreference='Stop'
+$Root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'read-update-policy.ps1')
+$dotSourced=($MyInvocation.InvocationName -eq '.')
+if(Get-AuUpdatePolicyLocalOnly -PolicyPath (Join-Path $Root 'config\update-policy.json')){
+ Write-Output 'LOCAL_ONLY source synchronization is disabled.'
+ if($dotSourced){$global:AutoUpdateSyncLastExit=0;return}
+ exit 0
+}
 $script:GitExe=(Get-Command git.exe -ErrorAction SilentlyContinue|Select-Object -First 1).Source
 if(-not $script:GitExe){$candidate='C:\Program Files\Git\cmd\git.exe';if(Test-Path -LiteralPath $candidate){$script:GitExe=$candidate}}
 if(-not $script:GitExe){throw 'git.exe is unavailable'}
@@ -8,8 +16,6 @@ if(-not (Get-Command git.exe -ErrorAction SilentlyContinue)){
  $gitFound=$gitCandidates|Where-Object{Test-Path -LiteralPath $_}|Select-Object -First 1
  if($gitFound){$env:Path=(Split-Path -Parent $gitFound)+';'+$env:Path}
 }
-$Root=Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'read-update-policy.ps1')
 . (Join-Path $PSScriptRoot 'shared-cycle-lock.ps1')
 $Logs=Join-Path $Root 'logs'
 $LogFile=Join-Path $Logs 'sync.log'
@@ -54,7 +60,6 @@ function Invoke-Git([string[]]$GitArgs,[switch]$Network){
  return [pscustomobject]@{Code=$exit;Text=$text.Trim()}
 }
 function Sync-Once{
- if(Get-AuUpdatePolicyLocalOnly -PolicyPath (Join-Path $Root 'config\update-policy.json')){Write-Log 'LOCAL_ONLY source synchronization is disabled';return 0}
  $branch=Invoke-Git @('branch','--show-current')
  if($branch.Code -ne 0 -or $branch.Text.Trim() -ne 'main'){Write-Log 'STOP branch must be main';return 20}
  $remote=Invoke-Git @('remote','get-url','origin')
