@@ -14,3 +14,16 @@ function Get-AuUpdatePolicyInterval {
         return $minutes
     } catch { return $FallbackMinutes }
 }
+
+function Get-AuUpdatePolicyLocalOnly {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$PolicyPath)
+    if(-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)){return $false}
+    try {
+        $policy=Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
+        if($policy.schema -ne 1){return $true}
+        if(-not $policy.PSObject.Properties['local_only']){return $false}
+        if($policy.local_only -isnot [bool]){return $true}
+        return $policy.local_only
+    } catch { return $true }
+}

@@ -1,5 +1,6 @@
 param(
     [switch]$Once,
+    [switch]$LocalOnly,
     [ValidateRange(1,1440)][int]$IntervalMinutes=10,
     [string]$StateRoot=(Join-Path $env:LOCALAPPDATA 'Siny\AutoUpdate'),
     [string]$Owner='siny-dev',
@@ -31,6 +32,7 @@ function Resolve-EngineModule{
     if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $entry[0].sha256){throw 'Installed AutoUpdate engine hash is invalid.'}
     $requiredFunctions=@('function Register-AuApplication','function Install-AuLatestAvailable','function Get-AuLatestLocalPackage','function Get-AuVerifiedCurrent','function Publish-AuLocalPackage','function Get-AuReleaseUploadPlan','function Save-AuPackageToLocal','function Get-AuLatestReleaseManifest')
     foreach($required in $requiredFunctions){if(-not (Select-String -LiteralPath $candidate -SimpleMatch $required -Quiet)){return $sourceModule}}
+    if($script:cycleLocalOnly -and -not (Select-String -LiteralPath $candidate -SimpleMatch '[switch]$LocalOnly' -Quiet)){return $sourceModule}
     return $candidate
 }
 function Import-EngineModule([string]$ModulePath){
@@ -39,6 +41,7 @@ function Import-EngineModule([string]$ModulePath){
     if($ModulePath -match '[\\/]versions[\\/](\d+\.\d+\.\d+)[\\/]') {$script:activeEngineVersion=$Matches[1]} else {$script:activeEngineVersion='source'}
 }
 function Invoke-UpdateCycle{
+    $script:cycleLocalOnly=$LocalOnly -or (Get-AuUpdatePolicyLocalOnly -PolicyPath (Join-Path $root 'config\update-policy.json'))
     $sharedLockPath=Join-Path $root 'outbox\locks\registered-apps.lock'
     $sharedLock=Enter-AuSharedCycleLock -Path $sharedLockPath -TimeoutMilliseconds 60000
     if($null -eq $sharedLock){
@@ -74,7 +77,7 @@ function Invoke-UpdateCycle{
             if(Test-Path -LiteralPath $buildRecipe -PathType Leaf){
                 try{
                     $remoteVersion=$null
-                    try{$remoteManifest=Get-AuLatestReleaseManifest -Owner $app.owner -Repository $app.repository -AppId $app.app_id -Architecture $app.architecture;if($remoteManifest){$remoteVersion=[string]$remoteManifest.Manifest.version}}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}
+                    if(-not $script:cycleLocalOnly){try{$remoteManifest=Get-AuLatestReleaseManifest -Owner $app.owner -Repository $app.repository -AppId $app.app_id -Architecture $app.architecture;if($remoteManifest){$remoteVersion=[string]$remoteManifest.Manifest.version}}catch{if($_.Exception.Message -notmatch 'HTTP 404'){throw}}}
                     $buildResultText=& (Join-Path $root 'tools\build-local-package.ps1') -RecipePath $buildRecipe -PackageRoot $localPackageRoot -RemoteVersion $remoteVersion
                     $buildResult=$buildResultText|ConvertFrom-Json
                     Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=('build-'+$buildResult.status);Version=$buildResult.version;Message=$buildResult.message})
@@ -88,7 +91,8 @@ function Invoke-UpdateCycle{
                 $versionGuard=Test-AuLocalPackageVersionMetadata -PackageRoot $localPackage.Path -BuildRecipePath $buildRecipe
                 if(-not $versionGuard.Valid){
                     Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$versionGuard.Status;Version=$localPackage.Manifest.version;Message=$versionGuard.Message})
-                }else{
+                    continue
+                }elseif(-not $script:cycleLocalOnly){
                     try{
                         $publish=Publish-AuLocalPackage -Owner $app.owner -Repository $app.repository -AppId $app.app_id -PackageRoot $localPackage.Path -Architecture $app.architecture
                         Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$publish.Status;Version=$publish.Version;Message=$publish.Message})
@@ -99,8 +103,10 @@ function Invoke-UpdateCycle{
                 }
             }
             try{
-                $result=Install-AuLatestAvailable -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture -LocalPackageRoot $localPackageRoot
-                $message=if($result.Message){[string]$result.Message}else{'Local and GitHub package check completed'}
+                $installOptions=@{}
+                if($script:cycleLocalOnly){$installOptions.LocalOnly=$true}
+                $result=Install-AuLatestAvailable -Owner $app.owner -Repository $app.repository -AppId $app.app_id -StateRoot $StateRoot -Architecture $app.architecture -LocalPackageRoot $localPackageRoot @installOptions
+                $message=if($result.Message){[string]$result.Message}elseif($script:cycleLocalOnly){'Local package check completed'}else{'Local and GitHub package check completed'}
                 Write-UpdateLog ([pscustomobject]@{AppId=$app.app_id;Status=$result.Status;Version=$result.Version;Message=$message})
                 if($app.app_id -ceq 'AutoUpdate'){
                     $newModulePath=Resolve-EngineModule
@@ -148,6 +154,8 @@ if($restartForSourceChange){
     if(-not $shell){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
     $quote={param([string]$Value) '"'+$Value.Replace('"','\"')+'"'}
     $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '+(& $quote $runnerPath)+' -IntervalMinutes '+$IntervalMinutes+' -StateRoot '+(& $quote $StateRoot)
+    if($LocalOnly){$arguments+=' -LocalOnly'}
+    $arguments+=' -Owner '+(& $quote $Owner)+' -Repository '+(& $quote $Repository)
     try{
         Start-Process -FilePath $shell -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent (Split-Path -Parent $runnerPath)) -WindowStyle Hidden|Out-Null
         Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='runner-restart-requested';Version=$null;Message='The shared worker changed; the current worker handed off to the updated script.'})

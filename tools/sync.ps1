@@ -54,6 +54,7 @@ function Invoke-Git([string[]]$GitArgs,[switch]$Network){
  return [pscustomobject]@{Code=$exit;Text=$text.Trim()}
 }
 function Sync-Once{
+ if(Get-AuUpdatePolicyLocalOnly -PolicyPath (Join-Path $Root 'config\update-policy.json')){Write-Log 'LOCAL_ONLY source synchronization is disabled';return 0}
  $branch=Invoke-Git @('branch','--show-current')
  if($branch.Code -ne 0 -or $branch.Text.Trim() -ne 'main'){Write-Log 'STOP branch must be main';return 20}
  $remote=Invoke-Git @('remote','get-url','origin')

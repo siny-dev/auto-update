@@ -1,5 +1,6 @@
 {
   "schema": 1,
   "interval_minutes": 10,
-  "purpose": "Default cadence after validated application"
+  "local_only": true,
+  "purpose": "Apply local patches on this PC without GitHub publishing or lookup"
 }

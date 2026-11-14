@@ -607,12 +607,18 @@ function Install-AuLatestAvailable {
     param(
         [Parameter(Mandatory=$true)][string]$Owner,[Parameter(Mandatory=$true)][string]$Repository,
         [Parameter(Mandatory=$true)][string]$AppId,[Parameter(Mandatory=$true)][string]$StateRoot,
-        [Parameter(Mandatory=$true)][string]$Architecture,[Parameter(Mandatory=$true)][string]$LocalPackageRoot
+        [Parameter(Mandatory=$true)][string]$Architecture,[Parameter(Mandatory=$true)][string]$LocalPackageRoot,
+        [switch]$LocalOnly
     )
     $local=Get-AuLatestLocalPackage -PackageRoot $LocalPackageRoot -AppId $AppId -Architecture $Architecture
     $remote=$null
     $remoteError=$null
-    try{$remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture}catch{$remoteError=$_.Exception.Message}
+    if(-not $LocalOnly){try{$remote=Get-AuLatestReleaseManifest -Owner $Owner -Repository $Repository -AppId $AppId -Architecture $Architecture}catch{$remoteError=$_.Exception.Message}}
+    if($LocalOnly -and -not $local){
+        $current=Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture
+        if($current){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode;Message='Keeping the verified installed package; no local update is available.'}}
+        return [pscustomobject]@{Status='not-found';AppId=$AppId;Version=$null;Path=$null;Mode=$null;Message='No valid local package is available.'}
+    }
     if($remoteError){
         if(-not $local){throw $remoteError}
         $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
@@ -638,7 +644,7 @@ function Install-AuLatestAvailable {
     $winner=Select-AuPackageWinner -LocalManifest $local.Manifest -RemoteManifest $remoteManifest
     if($winner -eq 'conflict'){return [pscustomobject]@{Status='conflict';AppId=$AppId;Version=[string]$local.Manifest.version;Path=$null;Mode=$null;Message='Local and GitHub packages have the same version but different contents; both were preserved.'}}
     $selectedVersion=if($winner -eq 'github'){[string]$remote.Manifest.version}else{[string]$local.Manifest.version}
-    $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
+    $current=if($LocalOnly){Get-AuVerifiedCurrent -StateRoot $StateRoot -AppId $AppId -Architecture $Architecture}else{Get-AuCurrent -StateRoot $StateRoot -AppId $AppId}
     if($current -and [version]$current.Version -gt [version]$selectedVersion){return [pscustomobject]@{Status='already-current';AppId=$AppId;Version=$current.Version;Path=$current.Path;Mode=$current.Mode}}
     if($winner -eq 'github'){return Install-AuLatestRelease -Owner $Owner -Repository $Repository -AppId $AppId -StateRoot $StateRoot -Architecture $Architecture -Candidate $remote -LocalPackageRoot $LocalPackageRoot}
     if($current -and $current.Version -eq $selectedVersion){
@@ -664,7 +670,7 @@ function Get-AuCurrent {
 
 function Get-AuVerifiedCurrent {
     [CmdletBinding()]
-    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId,[ValidateSet('x86','x64','arm64')][string]$Architecture='x64')
+    param([Parameter(Mandatory=$true)][string]$StateRoot,[Parameter(Mandatory=$true)][string]$AppId,[ValidateSet('any','x86','x64','arm64')][string]$Architecture='x64')
     if($AppId -cne 'AutoUpdate' -and $script:AutoUpdateEngineVersion -eq '0.1.0'){Set-AuRuntimeEngineVersion -StateRoot $StateRoot|Out-Null}
     $current=Get-AuCurrent -StateRoot $StateRoot -AppId $AppId
     if(-not $current){return $null}
