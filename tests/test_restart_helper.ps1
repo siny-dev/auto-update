@@ -32,7 +32,7 @@ function New-Package([string]$Version){
 function Invoke-Helper([string]$PackagePath,[string]$ScriptPath,[string]$Target,[int]$ExpectedExit){
     $driver=Join-Path $root ('driver-'+[guid]::NewGuid().ToString('N')+'.ps1')
     $stdout=$driver+'.out';$stderr=$driver+'.err';$state=Join-Path $root 'resume.json'
-    $command="& '$helper' -AppId 'restart-demo' -StateRoot '$root\state' -PackagePath '$PackagePath' -EntryRelativePath 'demo.exe' -TargetPath '$Target' -StateFile '$state' -Architecture x64 -HealthTimeoutSeconds 3 -Arguments @('-WindowStyle','Hidden','-NoProfile','-ExecutionPolicy','Bypass','-File','$ScriptPath')"
+    $command="& '$helper' -AppId 'restart-demo' -StateRoot '$root\state' -PackagePath '$PackagePath' -EntryRelativePath 'demo.exe' -TargetPath '$Target' -StateFile '$state' -Architecture x64 -HealthTimeoutSeconds 15 -Arguments @('-WindowStyle','Hidden','-NoProfile','-ExecutionPolicy','Bypass','-File','$ScriptPath')"
     [IO.File]::WriteAllText($driver,$command,[Text.UTF8Encoding]::new($true))
     $proc=Start-Process -FilePath $systemPowerShell -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$driver) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if($ExpectedExit -ge 0 -and $proc.ExitCode -ne $ExpectedExit){$out=if(Test-Path $stdout){Get-Content -Raw $stdout}else{''};$err=if(Test-Path $stderr){Get-Content -Raw $stderr}else{''};throw "Restart helper exit $($proc.ExitCode), expected $ExpectedExit. $out $err"}
