@@ -55,6 +55,10 @@ try{
         Assert (-not (Test-Path -LiteralPath (Join-Path $versionedPackageRoot '2.0.1'))) 'version_metadata mismatch created a package'
         [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'version.json'),'{"version":"v2.0.1"}',[Text.UTF8Encoding]::new($false))
         $metadataNext=Invoke-Build $null;Assert ($metadataNext.status -eq 'built' -and $metadataNext.version -eq '2.0.1') 'version_metadata did not allow a corrected embedded version'
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'notice.txt'),'app release candidate',[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $versionedPayloadRoot 'version.json'),'{"version":"v2.0.4"}',[Text.UTF8Encoding]::new($false))
+        $metadataAhead=Invoke-Build '2.0.2';Assert ($metadataAhead.status -eq 'built' -and $metadataAhead.version -eq '2.0.4') 'local build did not honor an app version that advanced beyond the next package/remote version'
+        $metadataStable=Invoke-Build '2.0.2';Assert ($metadataStable.status -eq 'unchanged' -and $metadataStable.version -eq '2.0.4') 'app version metadata did not remain stable across repeated local checks'
     }finally{$recipePath=$previousRecipePath;$packageRoot=$previousPackageRoot}
     'PASS: version_metadata accepts matching app versions and refuses to create a package when embedded metadata disagrees'
     'PASS: recipe builds first package, skips unchanged source, increments changed content, advances past remote version, rebuilds after package loss, and advances unchanged local package content beyond newer remote versions'
