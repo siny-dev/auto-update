@@ -20,12 +20,17 @@ class LocalModuleSyncTests(unittest.TestCase):
         self.state = self.root / "state"
         self.config = self.root / "local-module-sources.json"
         self.official_pointer = repo_root / "outbox" / "modules" / "AutoSync" / "current.json"
-        self.official_pointer_before = self.official_pointer.read_bytes()
+        self.official_pointer_before = (
+            self.official_pointer.read_bytes() if self.official_pointer.is_file() else None
+        )
         self.write_source("1.0.0", "local patch one")
         self.write_config(str(self.source))
 
     def tearDown(self):
-        self.assertEqual(self.official_pointer.read_bytes(), self.official_pointer_before)
+        if self.official_pointer_before is None:
+            self.assertFalse(self.official_pointer.exists())
+        else:
+            self.assertEqual(self.official_pointer.read_bytes(), self.official_pointer_before)
         self.temp.cleanup()
 
     def write_source(self, version, payload):

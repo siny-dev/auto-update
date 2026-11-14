@@ -5,7 +5,10 @@ $exe=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $manifest='\\H255\AI-Work\제작중인 프로그램\AutoSync\examples\app-modules.json'
 $moduleSource='\\H255\AI-Work\제작중인 프로그램\AutoUpdate\outbox\modules'
 if(-not (Test-Path -LiteralPath $exe -PathType Leaf)){throw 'Windows PowerShell 5.1 executable is missing.'}
-if(-not (Test-Path -LiteralPath (Join-Path $moduleSource 'AutoSync\current.json') -PathType Leaf)){throw 'Shared AutoSync module source is unavailable for the integration test.'}
+if(-not (Test-Path -LiteralPath (Join-Path $moduleSource 'AutoSync\current.json') -PathType Leaf)){
+    'SKIP: requires the H255 AutoSync module share.'
+    exit 0
+}
 function Quote-ProcessArgument([string]$Value){'"'+$Value.Replace('"','\"')+'"'}
 $root=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdatePs51DefaultSource-'+[guid]::NewGuid().ToString('N'))
 $state=Join-Path $root 'state'

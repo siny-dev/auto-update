@@ -1,10 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$projectRoot = Get-ChildItem -LiteralPath 'C:\AI-Work' -Directory |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'AutoUpdate\source\AutoUpdate.Core.psm1') } |
-    Select-Object -First 1 -ExpandProperty FullName
-if (-not $projectRoot) { throw 'Could not locate AutoUpdate project root.' }
-$core = Join-Path $projectRoot 'AutoUpdate\source\AutoUpdate.Core.psm1'
-$builder = Join-Path $projectRoot 'AutoUpdate\tools\build-module-package.ps1'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$core = Join-Path $projectRoot 'source\AutoUpdate.Core.psm1'
+$builder = Join-Path $projectRoot 'tools\build-module-package.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-source-state-test-' + [guid]::NewGuid().ToString('N'))
 $sourceRoot = Join-Path $testRoot 'source'
 $stateRoot = Join-Path $testRoot 'state'
