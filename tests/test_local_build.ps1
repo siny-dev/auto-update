@@ -1,9 +1,10 @@
 $ErrorActionPreference='Stop'
 $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$script:PowerShellExecutable=(Get-Process -Id $PID).Path
 $testRoot=Join-Path $tempRoot ('AutoUpdate-local-build-test-'+[guid]::NewGuid().ToString('N'))
 $recipePath=Join-Path $testRoot 'build.json';$payloadRoot=Join-Path $testRoot 'payload';$packageRoot=Join-Path $testRoot 'outbox'
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
-function Invoke-Build([string]$RemoteVersion){$args=@('-NoLogo','-NoProfile','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$args+=@('-RemoteVersion',$RemoteVersion)};$output=& (Get-Command pwsh.exe -ErrorAction Stop).Source @args;if($LASTEXITCODE -ne 0){throw "Build script failed: $output"};return ($output|ConvertFrom-Json)}
+function Invoke-Build([string]$RemoteVersion){$args=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$args+=@('-RemoteVersion',$RemoteVersion)};$output=& $script:PowerShellExecutable @args;if($LASTEXITCODE -ne 0){throw "Build script failed: $output"};return ($output|ConvertFrom-Json)}
 try{
     [void][IO.Directory]::CreateDirectory((Join-Path $payloadRoot 'resources'))
     [IO.File]::WriteAllText((Join-Path $payloadRoot 'resources\notice.json'),'first',[Text.UTF8Encoding]::new($false))
@@ -26,11 +27,12 @@ try{
     $sameRemote=Invoke-Build '3.0.0';Assert ($sameRemote.status -eq 'unchanged' -and $sameRemote.version -eq '3.0.1') 'rebuilt package was not stable when the remote version remained behind'
     $windowsPowerShell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if(Test-Path -LiteralPath $windowsPowerShell -PathType Leaf){
-        $unicodePayloadRoot=Join-Path $testRoot '한글-H255\payload'
+        $unicodePrefix=([string][char]0xD55C)+[char]0xAE00
+        $unicodePayloadRoot=Join-Path $testRoot ($unicodePrefix+'-H255\payload')
         [void][IO.Directory]::CreateDirectory((Join-Path $unicodePayloadRoot 'resources'))
         [IO.File]::WriteAllText((Join-Path $unicodePayloadRoot 'resources\notice.json'),'unicode payload',[Text.UTF8Encoding]::new($false))
         $unicodeRecipe=[ordered]@{app_id='unicode-build';version_seed='1.0.0';platform='windows';architecture='any';minimum_engine='0.1.0';mode='live';payload_root=$unicodePayloadRoot;files=@(@{path='resources/notice.json';kind='resource'})}
-        $unicodeRecipePath=Join-Path $testRoot '한글-build.json';$unicodeOutputRoot=Join-Path $testRoot 'unicode-outbox'
+        $unicodeRecipePath=Join-Path $testRoot ($unicodePrefix+'-build.json');$unicodeOutputRoot=Join-Path $testRoot 'unicode-outbox'
         [IO.File]::WriteAllText($unicodeRecipePath,($unicodeRecipe|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
         $unicodeOutput=& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '..\tools\build-local-package.ps1') -RecipePath $unicodeRecipePath -PackageRoot $unicodeOutputRoot
         if($LASTEXITCODE -ne 0){throw "Windows PowerShell 5.1 could not build a UTF-8 recipe containing Korean paths: $unicodeOutput"}

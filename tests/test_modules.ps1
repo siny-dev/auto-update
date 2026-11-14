@@ -3,6 +3,7 @@ $repoRoot=Split-Path -Parent $PSScriptRoot
 $module=Join-Path $repoRoot 'source\AutoUpdate.Core.psm1'
 $cli=Join-Path $repoRoot 'tools\autoupdate.ps1'
 $builder=Join-Path $repoRoot 'tools\build-module-package.ps1'
+$script:PowerShellExecutable=(Get-Process -Id $PID).Path
 Import-Module $module -Force
 $testRoot=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-module-test-'+[guid]::NewGuid().ToString('N'))
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
@@ -21,8 +22,7 @@ function Write-AppManifest([int]$ApiMajor){
 }
 function Quote-ProcessArgument([string]$Value){'"'+$Value.Replace('"','\"')+'"'}
 function Invoke-JsonProcess([string[]]$Arguments){
-    $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
-    $start=New-Object System.Diagnostics.ProcessStartInfo;$start.FileName=$exe;$start.Arguments=(($Arguments|ForEach-Object{Quote-ProcessArgument ([string]$_)}) -join ' ');$start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $start=New-Object System.Diagnostics.ProcessStartInfo;$start.FileName=$script:PowerShellExecutable;$start.Arguments=(($Arguments|ForEach-Object{Quote-ProcessArgument ([string]$_)}) -join ' ');$start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
     $process=New-Object System.Diagnostics.Process;$process.StartInfo=$start
     if(-not $process.Start()){throw 'Could not start a module CLI test process.'}
     $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync();$process.WaitForExit();$result=[pscustomobject]@{ExitCode=$process.ExitCode;StdOut=$stdoutTask.Result;StdErr=$stderrTask.Result};$process.Dispose();return $result

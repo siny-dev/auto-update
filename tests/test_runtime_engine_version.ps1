@@ -4,6 +4,7 @@ $module=Join-Path $repoRoot 'source\AutoUpdate.Core.psm1'
 $cli=Join-Path $repoRoot 'tools\autoupdate.ps1'
 $engineBuilder=Join-Path $repoRoot 'tools\build-engine-release.ps1'
 $moduleBuilder=Join-Path $repoRoot 'tools\build-module-package.ps1'
+$script:PowerShellExecutable=(Get-Process -Id $PID).Path
 Import-Module $module -Force
 $root=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdateRuntimeVersionTest-'+[guid]::NewGuid().ToString('N'))
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
@@ -36,9 +37,8 @@ try{
     $appInstall=Install-AuPackage -PackageRoot $appPackage -StateRoot $state -AppId 'engine-gated-app' -Architecture 'x64'
     Assert ($appInstall.Status -eq 'staged') 'The active engine version was not resolved while installing an app with a higher minimum_engine.'
 
-    $pwsh=(Get-Command pwsh.exe -ErrorAction Stop).Source
     $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','status','-StateRoot',$state,'-AppId','engine-gated-app','-Architecture','x64')
-    $run=Invoke-PowerShellProcess $pwsh $args
+    $run=Invoke-PowerShellProcess $script:PowerShellExecutable $args
     if($run.ExitCode -ne 0){throw "CLI status failed with exit $($run.ExitCode): $($run.StdErr) $($run.StdOut)"}
     $status=$run.StdOut|ConvertFrom-Json
     Assert ($status.Verified -and $status.Version -eq '1.0.0') 'The cached AutoUpdate module treated its fallback 0.1.0 as the active engine and rejected a valid installed app.'
