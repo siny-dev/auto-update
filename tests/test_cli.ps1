@@ -22,10 +22,25 @@ function Invoke-PowerShellProcess([string]$Executable,[string[]]$Arguments){
     $stdout=$stdoutTask.Result;$stderr=$stderrTask.Result;$process.Dispose()
     return [pscustomobject]@{ExitCode=$exitCode;StdOut=$stdout;StdErr=$stderr}
 }
+$script:PowerShellExecutable=$null
+foreach($candidate in @('powershell.exe','pwsh.exe')){
+    $command=Get-Command $candidate -ErrorAction SilentlyContinue|Select-Object -First 1
+    if(-not $command){continue}
+    $probeStart=New-Object System.Diagnostics.ProcessStartInfo
+    $probeStart.FileName=$command.Source
+    $probeStart.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "exit 0"'
+    $probeStart.UseShellExecute=$false;$probeStart.CreateNoWindow=$true
+    $probeProcess=New-Object System.Diagnostics.Process;$probeProcess.StartInfo=$probeStart
+    if(-not $probeProcess.Start()){continue}
+    $probeUsable=$probeProcess.WaitForExit(5000) -and $probeProcess.ExitCode -eq 0
+    if(-not $probeProcess.HasExited){$probeProcess.Kill();$probeProcess.WaitForExit()}
+    $probeProcess.Dispose()
+    if($probeUsable){$script:PowerShellExecutable=$command.Source;break}
+}
+if(-not $script:PowerShellExecutable){throw 'No usable PowerShell executable is available for the CLI subprocess test.'}
 function Invoke-Cli([string]$App,[string]$Architecture='x64'){
-    $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
-    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','resolve','-StateRoot',(Join-Path $root 'state'),'-AppId',$App,'-Architecture',$Architecture)
-    $run=Invoke-PowerShellProcess $exe $arguments
+    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$cli,'-Command','resolve','-StateRoot',(Join-Path $root 'state'),'-AppId',$App,'-Architecture',$Architecture)
+    $run=Invoke-PowerShellProcess $script:PowerShellExecutable $arguments
     return [pscustomobject]@{ExitCode=$run.ExitCode;Result=($run.StdOut|ConvertFrom-Json);Error=$run.StdErr}
 }
 try{
@@ -37,9 +52,8 @@ try{
     [IO.File]::WriteAllText((Join-Path $package 'manifest.json'),($manifest|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
     $missing=Invoke-Cli 'cli-demo';Assert ($missing.ExitCode -eq 2 -and $missing.Result.status -eq 'not-installed') 'resolve did not report a missing package distinctly'
     $state=Join-Path $root 'state'
-    $exe=(Get-Command pwsh.exe -ErrorAction Stop).Source
-    $registerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','register','-StateRoot',$state,'-AppId','cli-demo','-Owner','example-owner','-Repository','example-repo','-Architecture','x64')
-    $registeredRun=Invoke-PowerShellProcess $exe $registerArgs
+    $registerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$cli,'-Command','register','-StateRoot',$state,'-AppId','cli-demo','-Owner','example-owner','-Repository','example-repo','-Architecture','x64')
+    $registeredRun=Invoke-PowerShellProcess $script:PowerShellExecutable $registerArgs
     $registered=$registeredRun.StdOut|ConvertFrom-Json
     Assert ($registeredRun.ExitCode -eq 0 -and $registered.Status -eq 'registered') 'CLI registration did not report success'
     $registry=Get-AuRegisteredApps -StateRoot $state
