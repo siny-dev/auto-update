@@ -4,7 +4,17 @@ $script:PowerShellExecutable=(Get-Process -Id $PID).Path
 $testRoot=Join-Path $tempRoot ('AutoUpdate-local-build-test-'+[guid]::NewGuid().ToString('N'))
 $recipePath=Join-Path $testRoot 'build.json';$payloadRoot=Join-Path $testRoot 'payload';$packageRoot=Join-Path $testRoot 'outbox'
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
-function Invoke-Build([string]$RemoteVersion){$buildArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$buildArgs+=@('-RemoteVersion',$RemoteVersion)};$output=& $script:PowerShellExecutable @buildArgs;if($LASTEXITCODE -ne 0){throw "Build script failed: $output"};return ($output|ConvertFrom-Json)}
+function Quote-ProcessArgument([string]$Value){'"'+$Value.Replace('"','\"')+'"'}
+function Invoke-PowerShellProcess([string[]]$Arguments){
+    $start=New-Object System.Diagnostics.ProcessStartInfo;$start.FileName=$script:PowerShellExecutable
+    $start.Arguments=(($Arguments|ForEach-Object{Quote-ProcessArgument ([string]$_)}) -join ' ')
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $process=New-Object System.Diagnostics.Process;$process.StartInfo=$start
+    if(-not $process.Start()){throw 'Could not start the isolated package builder process.'}
+    $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync();$process.WaitForExit()
+    $result=[pscustomobject]@{ExitCode=$process.ExitCode;StdOut=$stdoutTask.Result;StdErr=$stderrTask.Result};$process.Dispose();return $result
+}
+function Invoke-Build([string]$RemoteVersion){$buildArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$buildArgs+=@('-RemoteVersion',$RemoteVersion)};$result=Invoke-PowerShellProcess $buildArgs;if($result.ExitCode -ne 0){throw "Build script failed (exit $($result.ExitCode)): $($result.StdErr) $($result.StdOut)"};return ($result.StdOut|ConvertFrom-Json)}
 try{
     [void][IO.Directory]::CreateDirectory((Join-Path $payloadRoot 'resources'))
     [IO.File]::WriteAllText((Join-Path $payloadRoot 'resources\notice.json'),'first',[Text.UTF8Encoding]::new($false))
@@ -34,9 +44,9 @@ try{
         $unicodeRecipe=[ordered]@{app_id='unicode-build';version_seed='1.0.0';platform='windows';architecture='any';minimum_engine='0.1.0';mode='live';payload_root=$unicodePayloadRoot;files=@(@{path='resources/notice.json';kind='resource'})}
         $unicodeRecipePath=Join-Path $testRoot ($unicodePrefix+'-build.json');$unicodeOutputRoot=Join-Path $testRoot 'unicode-outbox'
         [IO.File]::WriteAllText($unicodeRecipePath,($unicodeRecipe|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
-        $unicodeOutput=& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '..\tools\build-local-package.ps1') -RecipePath $unicodeRecipePath -PackageRoot $unicodeOutputRoot
-        if($LASTEXITCODE -ne 0){throw "Windows PowerShell 5.1 could not build a UTF-8 recipe containing Korean paths: $unicodeOutput"}
-        $unicodeResult=([string]::Join([Environment]::NewLine,@($unicodeOutput))|ConvertFrom-Json)
+        $unicodeRun=Invoke-PowerShellProcess @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$unicodeRecipePath,'-PackageRoot',$unicodeOutputRoot)
+        if($unicodeRun.ExitCode -ne 0){throw "Windows PowerShell 5.1 could not build a UTF-8 recipe containing Korean paths: $($unicodeRun.StdErr) $($unicodeRun.StdOut)"}
+        $unicodeResult=($unicodeRun.StdOut|ConvertFrom-Json)
         Assert ($unicodeResult.status -eq 'built' -and $unicodeResult.app_id -eq 'unicode-build') 'Windows PowerShell did not preserve a UTF-8 Korean payload path.'
     }
     $previousRecipePath=$recipePath;$previousPackageRoot=$packageRoot
