@@ -4,7 +4,7 @@ $script:PowerShellExecutable=(Get-Process -Id $PID).Path
 $testRoot=Join-Path $tempRoot ('AutoUpdate-local-build-test-'+[guid]::NewGuid().ToString('N'))
 $recipePath=Join-Path $testRoot 'build.json';$payloadRoot=Join-Path $testRoot 'payload';$packageRoot=Join-Path $testRoot 'outbox'
 function Assert([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
-function Invoke-Build([string]$RemoteVersion){$args=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$args+=@('-RemoteVersion',$RemoteVersion)};$output=& $script:PowerShellExecutable @args;if($LASTEXITCODE -ne 0){throw "Build script failed: $output"};return ($output|ConvertFrom-Json)}
+function Invoke-Build([string]$RemoteVersion){$buildArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\tools\build-local-package.ps1'),'-RecipePath',$recipePath,'-PackageRoot',$packageRoot);if($RemoteVersion){$buildArgs+=@('-RemoteVersion',$RemoteVersion)};$output=& $script:PowerShellExecutable @buildArgs;if($LASTEXITCODE -ne 0){throw "Build script failed: $output"};return ($output|ConvertFrom-Json)}
 try{
     [void][IO.Directory]::CreateDirectory((Join-Path $payloadRoot 'resources'))
     [IO.File]::WriteAllText((Join-Path $payloadRoot 'resources\notice.json'),'first',[Text.UTF8Encoding]::new($false))

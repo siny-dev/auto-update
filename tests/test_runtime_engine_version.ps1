@@ -37,8 +37,8 @@ try{
     $appInstall=Install-AuPackage -PackageRoot $appPackage -StateRoot $state -AppId 'engine-gated-app' -Architecture 'x64'
     Assert ($appInstall.Status -eq 'staged') 'The active engine version was not resolved while installing an app with a higher minimum_engine.'
 
-    $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','status','-StateRoot',$state,'-AppId','engine-gated-app','-Architecture','x64')
-    $run=Invoke-PowerShellProcess $script:PowerShellExecutable $args
+    $cliArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$cli,'-Command','status','-StateRoot',$state,'-AppId','engine-gated-app','-Architecture','x64')
+    $run=Invoke-PowerShellProcess $script:PowerShellExecutable $cliArgs
     if($run.ExitCode -ne 0){throw "CLI status failed with exit $($run.ExitCode): $($run.StdErr) $($run.StdOut)"}
     $status=$run.StdOut|ConvertFrom-Json
     Assert ($status.Verified -and $status.Version -eq '1.0.0') 'The cached AutoUpdate module treated its fallback 0.1.0 as the active engine and rejected a valid installed app.'

@@ -7,14 +7,21 @@ if(-not $shell -or (Split-Path -Leaf $shell) -notin @('powershell.exe','pwsh.exe
 $failures=[Collections.Generic.List[string]]::new()
 foreach($test in $tests){
     Write-Output ('RUN '+$test.Name)
+    $stdoutPath=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-test-'+[guid]::NewGuid().ToString('N')+'.stdout')
+    $stderrPath=Join-Path ([IO.Path]::GetTempPath()) ('AutoUpdate-test-'+[guid]::NewGuid().ToString('N')+'.stderr')
     try{
-        & $shell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $test.FullName
-        $testExitCode=$LASTEXITCODE
+        $arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$test.FullName.Replace('"','\"')+'"'
+        $child=Start-Process -FilePath $shell -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $testExitCode=$child.ExitCode
+        if(Test-Path -LiteralPath $stdoutPath){Get-Content -LiteralPath $stdoutPath}
+        if(Test-Path -LiteralPath $stderrPath){Get-Content -LiteralPath $stderrPath|ForEach-Object{[Console]::Error.WriteLine($_)}}
         if($testExitCode -ne 0){throw "exit code $testExitCode"}
         Write-Output ('PASS '+$test.Name)
     }catch{
         $failures.Add($test.Name+': '+$_.Exception.Message)
         Write-Output ('FAIL '+$test.Name+': '+$_.Exception.Message)
+    }finally{
+        Remove-Item -LiteralPath $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
     }
 }
 if($failures.Count -gt 0){
