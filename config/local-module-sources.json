@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "modules": [
+    {
+      "module_id": "AutoSync",
+      "source_root": "C:\\AI-Work\\제작중인 프로그램\\AutoSync",
+      "api_major": 1,
+      "minimum_engine": "0.1.0",
+      "activation_mode": "restart"
+    }
+  ]
+}

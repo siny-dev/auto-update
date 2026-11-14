@@ -1,10 +1,11 @@
 $ErrorActionPreference='Stop'
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('au-worker-hot-reload-'+[guid]::NewGuid().ToString('N'))
-$tools=Join-Path $temp 'tools';$source=Join-Path $temp 'source';$state=Join-Path $temp 'state';$config=Join-Path $temp 'config';$recipeRoot=Join-Path $temp 'outbox\apps\TEST-APP'
-$trace=Join-Path $temp 'module-trace.txt';$newModulePath=Join-Path $temp 'new-engine.psm1'
+$tools=Join-Path $temp 'tools';$source=Join-Path $temp 'source';$state=Join-Path $temp 'state';$config=Join-Path $temp 'config';$recipeRoot=Join-Path $temp 'outbox\apps\TEST-APP';$futureRecipeRoot=Join-Path $temp 'outbox\apps\FUTURE-APP'
+$trace=Join-Path $temp 'module-trace.txt';$newModulePath=Join-Path $temp 'new-engine.psm1';$localModuleMarker=Join-Path $temp 'local-module-sync.txt'
 [void][IO.Directory]::CreateDirectory($tools);[void][IO.Directory]::CreateDirectory($source);[void][IO.Directory]::CreateDirectory($config)
-[void][IO.Directory]::CreateDirectory($recipeRoot)
+[void][IO.Directory]::CreateDirectory($recipeRoot);[void][IO.Directory]::CreateDirectory($futureRecipeRoot)
 [IO.File]::WriteAllText((Join-Path $config 'update-policy.json'),'{"schema":1,"interval_minutes":10,"local_only":true}',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $config 'local-module-sources.json'),'{"schema":1,"modules":[{"module_id":"AutoSync","source_root":"C:\\fixture\\AutoSync","api_major":1,"minimum_engine":"0.1.0","activation_mode":"restart"}]}',[Text.UTF8Encoding]::new($false))
 [void][IO.Directory]::CreateDirectory((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source'))
 [void][IO.Directory]::CreateDirectory((Join-Path $state 'logs'))
 $worker=Join-Path $tools 'update-registered-apps.ps1'
@@ -21,12 +22,21 @@ if($RemoteVersion){[IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('
 '@
 [IO.File]::WriteAllText((Join-Path $tools 'build-local-package.ps1'),$buildSource,[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $recipeRoot 'build.json'),'{"app_id":"TEST-APP"}',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $futureRecipeRoot 'build.json'),'{"app_id":"FUTURE-APP","architecture":"x64"}',[Text.UTF8Encoding]::new($false))
+$localModuleSyncSource=@'
+import json,os
+from pathlib import Path
+Path(os.environ['AU_WORKER_TEST_MODULE_MARKER']).write_text('called',encoding='utf-8')
+print(json.dumps({'schema':1,'status':'ready','modules':[{'module_id':'AutoSync','source_version':'0.1.31','installed_version':'0.1.31','install_status':'already-cached','verified':True}]}))
+'@
+[IO.File]::WriteAllText((Join-Path $tools 'sync_local_modules.py'),$localModuleSyncSource,[Text.UTF8Encoding]::new($false))
 $workerSource=$workerSource.Replace('Local\AutoUpdateRegisteredAppsWorker','Local\AuWorkerHotReloadTestWorker').Replace('Local\AutoUpdateRegisteredApps','Local\AuWorkerHotReloadTestCycle')
 [IO.File]::WriteAllText($worker,$workerSource,[Text.UTF8Encoding]::new($false))
 $moduleTemplate=@'
 $script:EngineLabel='@@LABEL@@'
-function Get-AuRegisteredApps { param([string]$StateRoot) @([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='2-APP';owner='sample';repository='second-app';architecture='x64'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'}) }
-function Register-AuApplication { param($StateRoot,$AppId,$Owner,$Repository,$Architecture); [pscustomobject]@{Status='registered'} }
+$script:TestApps=@([pscustomobject]@{app_id='TEST-APP';owner='sample';repository='app';architecture='x86'},[pscustomobject]@{app_id='2-APP';owner='sample';repository='second-app';architecture='x64'},[pscustomobject]@{app_id='AutoUpdate';owner='sample';repository='engine';architecture='any'})
+function Get-AuRegisteredApps { param([string]$StateRoot) @($script:TestApps) }
+function Register-AuApplication { param($StateRoot,$AppId,$Owner,$Repository,$Architecture); $script:TestApps+= [pscustomobject]@{app_id=$AppId;owner=$Owner;repository=$Repository;architecture=$Architecture};[IO.File]::AppendAllText($env:AU_WORKER_TEST_REGISTER_MARKER,($AppId+[char]10));[pscustomobject]@{Status='registered'} }
 function Get-AuLatestLocalPackage { param($PackageRoot,$AppId,$Architecture); $null }
 function Get-AuLatestReleaseManifest { param($Owner,$Repository,$AppId,$Architecture); [IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('remote:'+ $AppId+[char]10)); $null }
 function Publish-AuLocalPackage { param($Owner,$Repository,$AppId,$PackageRoot,$Architecture); [IO.File]::AppendAllText($env:AU_WORKER_TEST_REMOTE_MARKER,('publish:'+ $AppId+[char]10)); $null }
@@ -60,11 +70,13 @@ $oldPath=Join-Path $state 'apps\AutoUpdate\versions\0.1.1\source\AutoUpdate.Core
 $oldSha=(Get-FileHash -LiteralPath $oldPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\versions\0.1.1\manifest.json'),(@{files=@(@{kind='runtime';path='source/AutoUpdate.Core.psm1';sha256=$oldSha})}|ConvertTo-Json -Depth 6))
 [IO.File]::WriteAllText((Join-Path $state 'apps\AutoUpdate\current.json'),('{"schema":1,"app_id":"AutoUpdate","version":"0.1.1"}'))
-$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER;$previousDelay=$env:AU_WORKER_TEST_DELAY_MS;$previousWaitMarker=$env:AU_WORKER_TEST_WAIT_MARKER;$previousRemoteMarker=$env:AU_WORKER_TEST_REMOTE_MARKER;$previousLocalMarker=$env:AU_WORKER_TEST_LOCAL_MARKER;$previousBuildMarker=$env:AU_WORKER_TEST_BUILD_MARKER
+$previousState=$env:AU_WORKER_TEST_STATE;$previousTrace=$env:AU_WORKER_TEST_TRACE;$previousModule=$env:AU_WORKER_TEST_NEW_MODULE;$previousMarker=$env:AU_WORKER_TEST_RESTART_MARKER;$previousDelay=$env:AU_WORKER_TEST_DELAY_MS;$previousWaitMarker=$env:AU_WORKER_TEST_WAIT_MARKER;$previousRemoteMarker=$env:AU_WORKER_TEST_REMOTE_MARKER;$previousLocalMarker=$env:AU_WORKER_TEST_LOCAL_MARKER;$previousBuildMarker=$env:AU_WORKER_TEST_BUILD_MARKER;$previousRegisterMarker=$env:AU_WORKER_TEST_REGISTER_MARKER;$previousModuleMarker=$env:AU_WORKER_TEST_MODULE_MARKER
 try{
     $env:AU_WORKER_TEST_STATE=$state;$env:AU_WORKER_TEST_TRACE=$trace;$env:AU_WORKER_TEST_NEW_MODULE=$newModulePath
     $env:AU_WORKER_TEST_REMOTE_MARKER=Join-Path $temp 'unexpected-remote-call.txt';$env:AU_WORKER_TEST_LOCAL_MARKER=Join-Path $temp 'local-only-apps.txt'
     $env:AU_WORKER_TEST_BUILD_MARKER=Join-Path $temp 'local-builds.txt'
+    $env:AU_WORKER_TEST_REGISTER_MARKER=Join-Path $temp 'registered-apps.txt'
+    $env:AU_WORKER_TEST_MODULE_MARKER=$localModuleMarker
     [IO.File]::WriteAllText((Join-Path $tools 'sync-core-module.ps1'),"[IO.File]::WriteAllText(`$env:AU_WORKER_TEST_REMOTE_MARKER,'module-publication')",[Text.UTF8Encoding]::new($false))
     $shell=Join-Path $PSHOME 'pwsh.exe'
     if(-not (Test-Path -LiteralPath $shell)){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
@@ -83,10 +95,14 @@ try{
     if($rows -notcontains 'old:AutoUpdate'){throw 'The active engine did not process its own update.'}
     if($rows -notcontains 'new:TEST-APP'){throw 'The remaining app was not processed with the newly installed engine in the same cycle.'}
     if($rows -notcontains 'new:2-APP'){throw 'An app sorted before AutoUpdate was not processed with the newly installed engine.'}
+    if($rows -notcontains 'new:FUTURE-APP'){throw 'A new app build recipe was not added to the same local update cycle.'}
     if(Test-Path -LiteralPath $env:AU_WORKER_TEST_REMOTE_MARKER){throw 'Local-only worker attempted source/module synchronization, GitHub lookup, or release publication.'}
     if(-not (Select-String -LiteralPath $env:AU_WORKER_TEST_BUILD_MARKER -SimpleMatch 'built:' -Quiet)){throw 'Local-only worker did not build a changed app package from its recipe.'}
     $localRows=@(Get-Content -LiteralPath $env:AU_WORKER_TEST_LOCAL_MARKER)
     if($localRows -notcontains 'AutoUpdate' -or $localRows -notcontains 'TEST-APP' -or $localRows -notcontains '2-APP'){throw 'Local-only mode did not reach every registered application.'}
+    if($localRows -notcontains 'FUTURE-APP' -or -not (Select-String -LiteralPath $env:AU_WORKER_TEST_REGISTER_MARKER -SimpleMatch 'FUTURE-APP' -Quiet)){throw 'A new app recipe was not registered and updated automatically.'}
+    if(-not (Test-Path -LiteralPath $localModuleMarker) -or (Get-Content -LiteralPath $localModuleMarker -Raw) -cne 'called'){throw 'Local-only worker did not invoke the local module source updater.'}
+    if(-not (Select-String -LiteralPath (Join-Path $state 'logs\app-updates.jsonl') -SimpleMatch 'module-local-already-cached' -Quiet)){throw 'Local-only worker did not record local module cache status.'}
     Write-Output 'PASS AutoUpdate hot reloads first; all other registered apps are handled by the new engine in the same cycle.'
     $logRows=@(Get-Content -LiteralPath (Join-Path $state 'logs\app-updates.jsonl')|ForEach-Object{$_|ConvertFrom-Json})
     $autoRow=@($logRows|Where-Object{$_.app_id -ceq 'AutoUpdate'}|Select-Object -First 1)
@@ -145,5 +161,7 @@ try{
     if($null -eq $previousRemoteMarker){Remove-Item Env:AU_WORKER_TEST_REMOTE_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_REMOTE_MARKER=$previousRemoteMarker}
     if($null -eq $previousLocalMarker){Remove-Item Env:AU_WORKER_TEST_LOCAL_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_LOCAL_MARKER=$previousLocalMarker}
     if($null -eq $previousBuildMarker){Remove-Item Env:AU_WORKER_TEST_BUILD_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_BUILD_MARKER=$previousBuildMarker}
+    if($null -eq $previousRegisterMarker){Remove-Item Env:AU_WORKER_TEST_REGISTER_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_REGISTER_MARKER=$previousRegisterMarker}
+    if($null -eq $previousModuleMarker){Remove-Item Env:AU_WORKER_TEST_MODULE_MARKER -ErrorAction SilentlyContinue}else{$env:AU_WORKER_TEST_MODULE_MARKER=$previousModuleMarker}
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

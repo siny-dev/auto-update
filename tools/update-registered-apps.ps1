@@ -40,6 +40,27 @@ function Import-EngineModule([string]$ModulePath){
     Import-Module $ModulePath -Force -Global
     if($ModulePath -match '[\\/]versions[\\/](\d+\.\d+\.\d+)[\\/]') {$script:activeEngineVersion=$Matches[1]} else {$script:activeEngineVersion='source'}
 }
+function Invoke-LocalModuleSync{
+    $configPath=Join-Path $root 'config\local-module-sources.json'
+    if(-not (Test-Path -LiteralPath $configPath -PathType Leaf)){return}
+    try{
+        if($script:activeEngineVersion -notmatch '^\d+\.\d+\.\d+$'){throw 'The active AutoUpdate engine version could not be verified.'}
+        $python=Get-Command python.exe -ErrorAction Stop|Select-Object -First 1
+        $scriptPath=Join-Path $root 'tools\sync_local_modules.py'
+        if(-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)){throw 'The local module sync tool is missing.'}
+        $moduleOutput=& $python.Source $scriptPath --config $configPath --state-root $StateRoot --engine-version $script:activeEngineVersion 2>&1
+        if($LASTEXITCODE -ne 0){throw [string]::Join([Environment]::NewLine,@($moduleOutput|ForEach-Object{[string]$_}))}
+        $moduleResult=([string]::Join([Environment]::NewLine,@($moduleOutput|ForEach-Object{[string]$_}))|ConvertFrom-Json -ErrorAction Stop)
+        foreach($module in @($moduleResult.modules)){
+            $status='module-local-'+[string]$module.install_status
+            $message='Local source '+[string]$module.source_version+' verified and cached; no remote service was used.'
+            Write-UpdateLog ([pscustomobject]@{AppId=[string]$module.module_id;Status=$status;Version=[string]$module.installed_version;Message=$message})
+        }
+    }catch{
+        $message=$_.Exception.Message -replace '(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)','[REDACTED]'
+        Write-UpdateLog ([pscustomobject]@{AppId='AutoSync';Status='module-local-sync-failed';Version=$null;Message=$message})
+    }
+}
 function Invoke-UpdateCycle{
     $script:cycleLocalOnly=$LocalOnly -or (Get-AuUpdatePolicyLocalOnly -PolicyPath (Join-Path $root 'config\update-policy.json'))
     $sharedLockPath=Join-Path $root 'outbox\locks\registered-apps.lock'
@@ -59,10 +80,32 @@ function Invoke-UpdateCycle{
         if(-not @($registered|Where-Object{$_.app_id -ceq 'AutoUpdate'}).Count){
             Register-AuApplication -StateRoot $StateRoot -AppId 'AutoUpdate' -Owner $Owner -Repository $Repository -Architecture 'any'|Out-Null
         }
+        if($script:cycleLocalOnly){
+            $registeredIds=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach($registeredApp in @(Get-AuRegisteredApps -StateRoot $StateRoot)){[void]$registeredIds.Add([string]$registeredApp.app_id)}
+            $appsRoot=Join-Path $root 'outbox\apps'
+            foreach($appDirectory in @(Get-ChildItem -LiteralPath $appsRoot -Directory -ErrorAction SilentlyContinue)){
+                $recipePath=Join-Path $appDirectory.FullName 'build.json'
+                if(-not (Test-Path -LiteralPath $recipePath -PathType Leaf)){continue}
+                try{
+                    $recipe=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($recipePath))|ConvertFrom-Json -ErrorAction Stop
+                    $recipeAppId=[string]$recipe.app_id
+                    if($recipeAppId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or -not [string]::Equals($recipeAppId,$appDirectory.Name,[StringComparison]::OrdinalIgnoreCase)){throw 'Local build recipe identity does not match its folder.'}
+                    if(-not $registeredIds.Add($recipeAppId)){continue}
+                    $architecture=[string]$recipe.architecture
+                    if($architecture -notin @('any','x86','x64','arm64')){throw 'Local build recipe architecture is invalid.'}
+                    Register-AuApplication -StateRoot $StateRoot -AppId $recipeAppId -Owner 'local' -Repository $recipeAppId -Architecture $architecture|Out-Null
+                    Write-UpdateLog ([pscustomobject]@{AppId=$recipeAppId;Status='local-recipe-registered';Version=$null;Message='A local build recipe was added to the automatic update cycle.'})
+                }catch{
+                    Write-UpdateLog ([pscustomobject]@{AppId=$appDirectory.Name;Status='local-recipe-invalid';Version=$null;Message=$_.Exception.Message})
+                }
+            }
+        }
         $apps=@(Get-AuRegisteredApps -StateRoot $StateRoot)
         $orderedApps=@($apps|Where-Object{$_.app_id -ceq 'AutoUpdate'})+@($apps|Where-Object{$_.app_id -cne 'AutoUpdate'})
         if($script:cycleLocalOnly){
             Write-UpdateLog ([pscustomobject]@{AppId='AutoUpdate';Status='module-local-only';Version=$null;Message='Shared module publication is skipped in local-only mode.'})
+            Invoke-LocalModuleSync
         }else{try{
             $moduleOutput=& (Join-Path $root 'tools\sync-core-module.ps1') -StateRoot $StateRoot
             $moduleResult=([string]::Join([Environment]::NewLine,@($moduleOutput|ForEach-Object{[string]$_}))|ConvertFrom-Json -ErrorAction Stop)

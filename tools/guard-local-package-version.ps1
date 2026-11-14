@@ -20,7 +20,7 @@ function Test-AuLocalPackageVersionMetadata {
         return [pscustomobject]@{Valid=$true;Status='version-metadata-not-configured';Message='No build recipe is present; no recipe metadata contract applies.'}
     }
     try {
-        $recipe = Get-Content -Raw -LiteralPath $BuildRecipePath | ConvertFrom-Json -ErrorAction Stop
+        $recipe = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($BuildRecipePath)) | ConvertFrom-Json -ErrorAction Stop
         $contractProperty = $recipe.PSObject.Properties['version_metadata']
         if (-not $contractProperty -or $null -eq $contractProperty.Value) {
             return [pscustomobject]@{Valid=$true;Status='version-metadata-not-configured';Message='The build recipe does not declare version_metadata.'}
