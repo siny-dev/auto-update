@@ -54,8 +54,16 @@ try{
     $env:AU_WORKER_TEST_STATE=$state;$env:AU_WORKER_TEST_TRACE=$trace;$env:AU_WORKER_TEST_NEW_MODULE=$newModulePath
     $shell=Join-Path $PSHOME 'pwsh.exe'
     if(-not (Test-Path -LiteralPath $shell)){$shell=(Get-Command powershell.exe -ErrorAction Stop|Select-Object -First 1).Source}
-    & $shell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $worker -Once -StateRoot $state -Owner sample -Repository engine
-    if($LASTEXITCODE -ne 0){throw "Worker exited with code $LASTEXITCODE"}
+    $workerArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$worker,'-Once','-StateRoot',$state,'-Owner','sample','-Repository','engine')
+    $start=New-Object System.Diagnostics.ProcessStartInfo;$start.FileName=$shell
+    $start.Arguments=(($workerArgs|ForEach-Object{'"'+([string]$_).Replace('"','\"')+'"'}) -join ' ')
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $process=New-Object System.Diagnostics.Process;$process.StartInfo=$start
+    if(-not $process.Start()){throw 'Could not start the one-shot worker fixture.'}
+    $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync();$process.WaitForExit()
+    $workerExitCode=$process.ExitCode;$workerStdout=$stdoutTask.Result;$workerStderr=$stderrTask.Result;$process.Dispose()
+    if($workerStdout){Write-Output $workerStdout.TrimEnd()};if($workerStderr){[Console]::Error.WriteLine($workerStderr.TrimEnd())}
+    if($workerExitCode -ne 0){throw "Worker exited with code $workerExitCode"}
     if(-not (Test-Path -LiteralPath $trace)){Get-Content -LiteralPath (Join-Path $state 'logs\app-updates.jsonl') -ErrorAction SilentlyContinue|Write-Output;throw 'Worker did not call its registered-app update function.'}
     $rows=@(Get-Content -LiteralPath $trace)
     if($rows -notcontains 'old:AutoUpdate'){throw 'The active engine did not process its own update.'}
