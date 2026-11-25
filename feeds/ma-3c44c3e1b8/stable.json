@@ -4,19 +4,10 @@
   "app_id": "ma-3c44c3e1b8",
   "app_code": "ma-3c44c3e1b8",
   "package_name": "com.siny.apps.ma_3c44c3e1b8",
-  "version": "1.0.033",
-  "version_code": 1019,
-  "apk_url": "https://github.com/siny-dev/auto-update/releases/download/candidate-ma-3c44c3e1b8-v1.0.033-1019/MA-1.0.033-1019.apk",
-  "sha256": "e91043c97601168a21b4bd98d77945b761ac0367ed3c84ef8c5f9e0d092b9b99",
-  "release_tag": "candidate-ma-3c44c3e1b8-v1.0.033-1019",
-  "rollback_versions": [
-    {
-      "version": "1.0.25",
-      "source_version_code": 1011,
-      "version_code": 1020,
-      "apk_url": "https://github.com/siny-dev/auto-update/releases/download/candidate-ma-3c44c3e1b8-v1.0.025-1020/MA-1.0.025-1020.apk",
-      "sha256": "ec48190181499ef6434e4c8927f664be59ded6e97e27802d1845cd25c31d4427",
-      "release_tag": "candidate-ma-3c44c3e1b8-v1.0.025-1020"
-    }
-  ]
+  "version": "1.0.034",
+  "version_code": 1021,
+  "apk_url": "https://github.com/siny-dev/auto-update/releases/download/candidate-ma-3c44c3e1b8-v1.0.034-1021/MA-1.0.034-1021.apk",
+  "sha256": "f975e8e666da033e9dd587b5b82e2b96de6f6b298045aac3fe17c506402e5918",
+  "release_tag": "candidate-ma-3c44c3e1b8-v1.0.034-1021",
+  "rollback_versions": []
 }
