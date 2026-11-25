@@ -4,11 +4,11 @@
   "app_id": "ma-3c44c3e1b8",
   "app_code": "ma-3c44c3e1b8",
   "package_name": "com.siny.apps.ma_3c44c3e1b8",
-  "version": "1.0.027",
-  "version_code": 1012,
-  "apk_url": "https://github.com/siny-dev/MA/releases/download/v1.0.027/MA-ma-3c44c3e1b8-1.0.027.apk",
-  "sha256": "aafaf6c1c81d5cad7a85ba8a419ee8e95cd3cad072e4f70bbee4c7ff03d9a3e8",
-  "release_tag": "v1.0.027",
+  "version": "1.0.032",
+  "version_code": 1017,
+  "apk_url": "https://github.com/siny-dev/auto-update/releases/download/candidate-ma-3c44c3e1b8-v1.0.032-1017/MA-1.0.032-1017.apk",
+  "sha256": "79401c5f7aeecea130826d577824556a444d63aa41cef51723d21ba94f56547e",
+  "release_tag": "candidate-ma-3c44c3e1b8-v1.0.032-1017",
   "rollback_versions": [
     {
       "version": "1.0.25",
